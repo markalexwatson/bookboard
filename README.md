@@ -6,9 +6,14 @@ A visual planning tool for novelists. Pin your characters, themes, locations, an
 
 - **Chapter Timeline**: Import your manuscript and see chapters in order. Drag to reorder.
 - **Free-form Corkboard**: Pin cards for characters, themes, locations, scenes, and ideas. Drag them anywhere.
-- **Import/Export**: Round-trip your data as JSON, or export a readable Markdown bible.
+- **AI Extraction**: Use Gemini to automatically extract characters, themes, locations, and key scenes from your manuscript.
+- **Import/Export**: 
+  - Import Markdown manuscripts or JSON project files
+  - Export your manuscript (full text in chapter order)
+  - Export your bible (characters, themes, etc.)
+  - Export JSON for backup/restore
 - **Auto-save**: Everything saves to your browser's localStorage automatically.
-- **No backend**: Pure client-side. Your data never leaves your browser.
+- **No backend**: Pure client-side. Your data never leaves your browser (API calls go direct to Gemini).
 
 ## Usage
 
@@ -16,9 +21,10 @@ A visual planning tool for novelists. Pin your characters, themes, locations, an
 
 1. Open `index.html` in your browser (or visit the GitHub Pages URL)
 2. Click **Import** and drop in a Markdown file (your manuscript) or a JSON file (a previous export)
-3. Add cards using the **+** button
-4. Drag cards around the corkboard to organise
-5. Click **Export Bible** when you're ready to save
+3. Click **Extract** to use Gemini AI to identify characters, themes, locations, and scenes (requires API key)
+4. Add or edit cards using the **+** button or by double-clicking existing cards
+5. Drag cards around the corkboard to organise
+6. Click **Export** to save your manuscript, bible, or project backup
 
 ### Hosting on GitHub Pages
 
@@ -28,18 +34,22 @@ A visual planning tool for novelists. Pin your characters, themes, locations, an
 
 ### Markdown Import Format
 
-The importer treats `#` and `##` headers as chapter titles. Everything between headers becomes chapter content.
+The importer treats `#` as the book title and `##` as chapter headers. Everything between chapter headers becomes chapter content.
 
 ```markdown
-# Chapter One: The Beginning
+# My Novel Title
+
+## Chapter One: The Beginning
 
 It was a dark and stormy night. The detective paced his office,
 chain-smoking and muttering about the case.
 
-# Chapter Two: The Discovery
+## Chapter Two: The Discovery
 
 The body was found at dawn...
 ```
+
+If your document only uses `#` headers (no `##`), they'll be treated as chapters instead.
 
 ### JSON Format (Bible Schema)
 
@@ -85,28 +95,17 @@ For full round-trip fidelity, use JSON. This is also the format to use if you pr
 - `scene` - Key dramatic moments
 - `idea` - Freeform notes
 
-#### Generating Entities with Claude
+### Using AI Extraction
 
-If you want to auto-extract entities from your manuscript, you can use Claude (or any LLM) separately. Here's a prompt that works well:
+Click the **Extract** button in the toolbar to use Gemini AI to automatically identify:
+- Characters (people mentioned by name)
+- Themes (recurring ideas or motifs)
+- Locations (places and settings)
+- Key scenes (important dramatic moments)
 
-```
-Analyze this novel excerpt and extract entities. For each, provide:
-- type: character|theme|location|scene
-- name: short identifier
-- description: 1-2 sentences
-- chapterRefs: array of chapter numbers where it appears
+You'll need a Gemini API key, which you can get free at [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Your key is stored only in your browser's localStorage and is sent directly to Google's API—it never touches any other server.
 
-Respond with valid JSON matching this schema:
-{
-  "entities": [
-    {"type": "character", "name": "...", "description": "...", "chapterRefs": [1, 2]}
-  ]
-}
-
-[Paste your manuscript here]
-```
-
-Then merge the extracted entities into your bible JSON before importing.
+Extracted entities are added to your corkboard. You can then edit, rearrange, or delete them as needed.
 
 ## Local Development
 

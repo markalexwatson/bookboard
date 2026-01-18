@@ -3,37 +3,148 @@ const { useState, useEffect, useRef, useCallback } = React;
 // Utility: Generate unique IDs
 const generateId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
+// Storage keys
+const STORAGE_KEYS = {
+  projectIndex: 'bookboard-index',
+  projectPrefix: 'bookboard-project-',
+  geminiKey: 'bookboard-gemini-key',
+  lastOpenedProject: 'bookboard-last-opened'
+};
+
 // Default empty project
-const emptyProject = {
+const createEmptyProject = () => ({
+  id: generateId('proj'),
   title: "Untitled Novel",
   chapters: [],
-  entities: []
+  entities: [],
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString()
+});
+
+// Load project index from localStorage
+const loadProjectIndex = () => {
+  const stored = localStorage.getItem(STORAGE_KEYS.projectIndex);
+  return stored ? JSON.parse(stored) : [];
+};
+
+// Save project index to localStorage
+const saveProjectIndex = (index) => {
+  localStorage.setItem(STORAGE_KEYS.projectIndex, JSON.stringify(index));
+};
+
+// Load a specific project
+const loadProject = (projectId) => {
+  const stored = localStorage.getItem(STORAGE_KEYS.projectPrefix + projectId);
+  return stored ? JSON.parse(stored) : null;
+};
+
+// Save a specific project
+const saveProject = (project) => {
+  const updated = { ...project, updatedAt: new Date().toISOString() };
+  localStorage.setItem(STORAGE_KEYS.projectPrefix + project.id, JSON.stringify(updated));
+  
+  // Update index
+  const index = loadProjectIndex();
+  const existingIdx = index.findIndex(p => p.id === project.id);
+  const indexEntry = {
+    id: project.id,
+    title: project.title,
+    updatedAt: updated.updatedAt,
+    chapterCount: project.chapters.length,
+    entityCount: project.entities.length
+  };
+  
+  if (existingIdx >= 0) {
+    index[existingIdx] = indexEntry;
+  } else {
+    index.push(indexEntry);
+  }
+  saveProjectIndex(index);
+  
+  return updated;
+};
+
+// Delete a project
+const deleteProjectFromStorage = (projectId) => {
+  localStorage.removeItem(STORAGE_KEYS.projectPrefix + projectId);
+  const index = loadProjectIndex().filter(p => p.id !== projectId);
+  saveProjectIndex(index);
 };
 
 // Main App Component
 function App() {
-  const [project, setProject] = useState(() => {
-    const saved = localStorage.getItem('bookboard-project');
-    return saved ? JSON.parse(saved) : emptyProject;
-  });
+  const [view, setView] = useState('library'); // 'library' or 'editor'
+  const [projectIndex, setProjectIndex] = useState(loadProjectIndex);
+  const [currentProject, setCurrentProject] = useState(null);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showEntityModal, setShowEntityModal] = useState(false);
+  const [showExtractModal, setShowExtractModal] = useState(false);
+  const [showImportConflictModal, setShowImportConflictModal] = useState(false);
+  const [pendingImport, setPendingImport] = useState(null);
   const [editingEntity, setEditingEntity] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState('');
+  const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem(STORAGE_KEYS.geminiKey) || '');
 
-  // Auto-save to localStorage
+  // Save Gemini key when it changes
   useEffect(() => {
-    localStorage.setItem('bookboard-project', JSON.stringify(project));
-  }, [project]);
+    if (geminiKey) {
+      localStorage.setItem(STORAGE_KEYS.geminiKey, geminiKey);
+    }
+  }, [geminiKey]);
+
+  // Auto-save current project when it changes
+  useEffect(() => {
+    if (currentProject) {
+      const saved = saveProject(currentProject);
+      setProjectIndex(loadProjectIndex());
+    }
+  }, [currentProject]);
+
+  // Open a project
+  const openProject = (projectId) => {
+    const project = loadProject(projectId);
+    if (project) {
+      setCurrentProject(project);
+      setView('editor');
+      localStorage.setItem(STORAGE_KEYS.lastOpenedProject, projectId);
+    }
+  };
+
+  // Create new project
+  const createNewProject = () => {
+    const project = createEmptyProject();
+    setCurrentProject(project);
+    setView('editor');
+  };
+
+  // Go back to library
+  const goToLibrary = () => {
+    setCurrentProject(null);
+    setView('library');
+  };
+
+  // Delete a project with confirmation
+  const handleDeleteProject = (projectId, projectTitle) => {
+    if (confirm(`Delete "${projectTitle}"? This cannot be undone.`)) {
+      deleteProjectFromStorage(projectId);
+      setProjectIndex(loadProjectIndex());
+      if (currentProject?.id === projectId) {
+        setCurrentProject(null);
+        setView('library');
+      }
+    }
+  };
 
   // Update project title
   const updateTitle = (title) => {
-    setProject(prev => ({ ...prev, title }));
+    setCurrentProject(prev => ({ ...prev, title }));
   };
 
   // Update entity position
   const updateEntityPosition = (id, x, y) => {
-    setProject(prev => ({
+    setCurrentProject(prev => ({
       ...prev,
       entities: prev.entities.map(e => 
         e.id === id ? { ...e, position: { x, y } } : e
@@ -43,7 +154,7 @@ function App() {
 
   // Delete entity
   const deleteEntity = (id) => {
-    setProject(prev => ({
+    setCurrentProject(prev => ({
       ...prev,
       entities: prev.entities.filter(e => e.id !== id)
     }));
@@ -51,7 +162,7 @@ function App() {
 
   // Save entity (add or update)
   const saveEntity = (entity) => {
-    setProject(prev => {
+    setCurrentProject(prev => {
       const exists = prev.entities.find(e => e.id === entity.id);
       if (exists) {
         return {
@@ -75,11 +186,10 @@ function App() {
 
   // Reorder chapters
   const reorderChapters = (fromIndex, toIndex) => {
-    setProject(prev => {
+    setCurrentProject(prev => {
       const newChapters = [...prev.chapters];
       const [moved] = newChapters.splice(fromIndex, 1);
       newChapters.splice(toIndex, 0, moved);
-      // Update order property
       return {
         ...prev,
         chapters: newChapters.map((ch, i) => ({ ...ch, order: i + 1 }))
@@ -91,6 +201,7 @@ function App() {
   const parseMarkdown = (markdown) => {
     const lines = markdown.split('\n');
     const chapters = [];
+    let bookTitle = null;
     let currentChapter = null;
     let contentBuffer = [];
 
@@ -98,14 +209,19 @@ function App() {
       const h1Match = line.match(/^#\s+(.+)$/);
       const h2Match = line.match(/^##\s+(.+)$/);
       
-      if (h1Match || h2Match) {
+      if (h1Match && bookTitle === null) {
+        bookTitle = h1Match[1];
+        continue;
+      }
+      
+      if (h2Match) {
         if (currentChapter) {
           currentChapter.content = contentBuffer.join('\n').trim();
           chapters.push(currentChapter);
         }
         currentChapter = {
           id: generateId('ch'),
-          title: (h1Match || h2Match)[1],
+          title: h2Match[1],
           content: '',
           order: chapters.length + 1
         };
@@ -120,76 +236,199 @@ function App() {
       chapters.push(currentChapter);
     }
 
-    return chapters;
+    if (chapters.length === 0) {
+      return parseMarkdownFallback(markdown);
+    }
+
+    return { bookTitle, chapters };
   };
 
-  // Import handler
+  const parseMarkdownFallback = (markdown) => {
+    const lines = markdown.split('\n');
+    const chapters = [];
+    let currentChapter = null;
+    let contentBuffer = [];
+
+    for (const line of lines) {
+      const headerMatch = line.match(/^#{1,2}\s+(.+)$/);
+      
+      if (headerMatch) {
+        if (currentChapter) {
+          currentChapter.content = contentBuffer.join('\n').trim();
+          chapters.push(currentChapter);
+        }
+        currentChapter = {
+          id: generateId('ch'),
+          title: headerMatch[1],
+          content: '',
+          order: chapters.length + 1
+        };
+        contentBuffer = [];
+      } else if (currentChapter) {
+        contentBuffer.push(line);
+      }
+    }
+
+    if (currentChapter) {
+      currentChapter.content = contentBuffer.join('\n').trim();
+      chapters.push(currentChapter);
+    }
+
+    return { bookTitle: null, chapters };
+  };
+
+  // Check for title conflict and handle import
   const handleImport = (content, isJson) => {
     try {
+      let importedTitle;
+      let importedData;
+
       if (isJson) {
         const data = JSON.parse(content);
-        // Validate structure
         if (!data.chapters) data.chapters = [];
         if (!data.entities) data.entities = [];
-        if (!data.title) data.title = 'Untitled Novel';
-        
-        // Ensure all chapters have IDs
-        data.chapters = data.chapters.map((ch, i) => ({
-          ...ch,
-          id: ch.id || generateId('ch'),
-          order: ch.order || i + 1
-        }));
-        
-        // Ensure all entities have IDs and positions
-        data.entities = data.entities.map((ent, i) => ({
-          ...ent,
-          id: ent.id || generateId('ent'),
-          position: ent.position || { x: 100 + (i % 4) * 240, y: 80 + Math.floor(i / 4) * 200 }
-        }));
-        
-        setProject(data);
+        importedTitle = data.title || 'Untitled Novel';
+        importedData = { type: 'json', data };
       } else {
-        const chapters = parseMarkdown(content);
-        setProject(prev => ({
-          ...prev,
-          chapters,
-          entities: []
-        }));
+        const { bookTitle, chapters } = parseMarkdown(content);
+        importedTitle = bookTitle || 'Untitled Novel';
+        importedData = { type: 'markdown', bookTitle, chapters };
+      }
+
+      // Check for title conflict
+      const existingProject = projectIndex.find(p => p.title.toLowerCase() === importedTitle.toLowerCase());
+      
+      if (existingProject) {
+        setPendingImport({ ...importedData, title: importedTitle, existingProject });
+        setShowImportModal(false);
+        setShowImportConflictModal(true);
+      } else {
+        completeImport(importedData, importedTitle);
       }
     } catch (error) {
       alert(`Import failed: ${error.message}`);
     }
+  };
+
+  // Complete the import (after conflict resolution if needed)
+  const completeImport = (importedData, title, overwriteId = null) => {
+    let project;
+
+    if (overwriteId) {
+      project = loadProject(overwriteId);
+      if (importedData.type === 'json') {
+        project = {
+          ...importedData.data,
+          id: overwriteId,
+          title: title,
+          createdAt: project.createdAt,
+          chapters: importedData.data.chapters.map((ch, i) => ({
+            ...ch,
+            id: ch.id || generateId('ch'),
+            order: ch.order || i + 1
+          })),
+          entities: importedData.data.entities.map((ent, i) => ({
+            ...ent,
+            id: ent.id || generateId('ent'),
+            position: ent.position || { x: 100 + (i % 4) * 240, y: 80 + Math.floor(i / 4) * 200 }
+          }))
+        };
+      } else {
+        project = {
+          ...project,
+          title: title,
+          chapters: importedData.chapters,
+          entities: []
+        };
+      }
+    } else {
+      project = createEmptyProject();
+      project.title = title;
+
+      if (importedData.type === 'json') {
+        project.chapters = importedData.data.chapters.map((ch, i) => ({
+          ...ch,
+          id: ch.id || generateId('ch'),
+          order: ch.order || i + 1
+        }));
+        project.entities = importedData.data.entities.map((ent, i) => ({
+          ...ent,
+          id: ent.id || generateId('ent'),
+          position: ent.position || { x: 100 + (i % 4) * 240, y: 80 + Math.floor(i / 4) * 200 }
+        }));
+      } else {
+        project.chapters = importedData.chapters;
+        project.entities = [];
+      }
+    }
+
+    setCurrentProject(project);
+    setView('editor');
     setShowImportModal(false);
+    setShowImportConflictModal(false);
+    setPendingImport(null);
+  };
+
+  // Handle conflict resolution
+  const handleConflictResolution = (action) => {
+    if (!pendingImport) return;
+
+    if (action === 'overwrite') {
+      completeImport(pendingImport, pendingImport.title, pendingImport.existingProject.id);
+    } else if (action === 'new') {
+      const baseTitle = pendingImport.title;
+      let version = 2;
+      while (projectIndex.find(p => p.title.toLowerCase() === `${baseTitle} v${version}`.toLowerCase())) {
+        version++;
+      }
+      completeImport(pendingImport, `${baseTitle} v${version}`);
+    } else {
+      setShowImportConflictModal(false);
+      setPendingImport(null);
+    }
   };
 
   // Export as JSON
   const exportAsJson = () => {
-    const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(currentProject, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${project.title.toLowerCase().replace(/\s+/g, '-')}-bible.json`;
+    a.download = `${currentProject.title.toLowerCase().replace(/\s+/g, '-')}-project.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
-  // Export as Markdown
-  const exportAsMarkdown = () => {
-    let md = `# ${project.title}\n\n`;
+  // Export manuscript as Markdown
+  const exportManuscript = () => {
+    let md = `# ${currentProject.title}\n\n`;
     
-    // Chapters
-    if (project.chapters.length > 0) {
-      md += `## Chapters\n\n`;
-      project.chapters.forEach((ch, i) => {
-        md += `### ${i + 1}. ${ch.title}\n\n`;
-        if (ch.content) {
-          const preview = ch.content.substring(0, 300);
-          md += `${preview}${ch.content.length > 300 ? '...' : ''}\n\n`;
-        }
+    currentProject.chapters.forEach((ch) => {
+      md += `## ${ch.title}\n\n`;
+      md += `${ch.content}\n\n`;
+    });
+
+    const blob = new Blob([md.trim()], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${currentProject.title.toLowerCase().replace(/\s+/g, '-')}-manuscript.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Export bible as Markdown
+  const exportBible = () => {
+    let md = `# ${currentProject.title} — Story Bible\n\n`;
+    
+    if (currentProject.chapters.length > 0) {
+      md += `## Chapter Outline\n\n`;
+      currentProject.chapters.forEach((ch, i) => {
+        md += `${i + 1}. ${ch.title}\n`;
       });
+      md += `\n`;
     }
 
-    // Entities by type
     const entityTypes = ['character', 'theme', 'location', 'scene', 'idea'];
     const typeLabels = {
       character: 'Characters',
@@ -200,7 +439,7 @@ function App() {
     };
 
     entityTypes.forEach(type => {
-      const entities = project.entities.filter(e => e.type === type);
+      const entities = currentProject.entities.filter(e => e.type === type);
       if (entities.length > 0) {
         md += `## ${typeLabels[type]}\n\n`;
         entities.forEach(entity => {
@@ -210,7 +449,10 @@ function App() {
           }
           if (entity.chapterRefs?.length > 0) {
             const chapterNames = entity.chapterRefs
-              .map(id => project.chapters.find(c => c.id === id)?.title)
+              .map(id => {
+                const ch = currentProject.chapters.find(c => c.id === id);
+                return ch ? ch.title : null;
+              })
               .filter(Boolean);
             if (chapterNames.length > 0) {
               md += `*Appears in: ${chapterNames.join(', ')}*\n\n`;
@@ -220,44 +462,205 @@ function App() {
       }
     });
 
-    const blob = new Blob([md], { type: 'text/markdown' });
+    const blob = new Blob([md.trim()], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${project.title.toLowerCase().replace(/\s+/g, '-')}-bible.md`;
+    a.download = `${currentProject.title.toLowerCase().replace(/\s+/g, '-')}-bible.md`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
-  // New project
-  const newProject = () => {
-    if (confirm('Start a new project? Unsaved changes will be lost.')) {
-      setProject(emptyProject);
+  // Extract entities using Gemini API
+  const extractEntities = async () => {
+    if (!geminiKey) {
+      alert('Please enter your Gemini API key');
+      return;
+    }
+
+    if (currentProject.chapters.length === 0) {
+      alert('Import a manuscript first');
+      return;
+    }
+
+    setLoading(true);
+    setLoadingMessage('Analysing manuscript...');
+    setShowExtractModal(false);
+
+    const fullText = currentProject.chapters.map((ch, i) => `## Chapter ${i + 1}: ${ch.title}\n${ch.content}`).join('\n\n');
+    const truncatedText = fullText.substring(0, 50000);
+
+    const prompt = `Analyse this novel excerpt and extract the following entities. For each entity, provide a JSON object.
+
+TEXT:
+${truncatedText}
+
+Extract:
+1. CHARACTERS: People mentioned by name. Include their role/description and which chapter numbers they appear in (1-indexed).
+2. THEMES: Major themes or motifs you identify.
+3. LOCATIONS: Named places or settings.
+4. KEY SCENES: Important dramatic moments or turning points.
+
+Respond ONLY with valid JSON in this exact format (no markdown code fences, no explanation, just the JSON):
+{
+  "entities": [
+    {"type": "character", "name": "Name", "description": "Brief description", "chapterNums": [1, 2]},
+    {"type": "theme", "name": "Theme Name", "description": "How it manifests", "chapterNums": []},
+    {"type": "location", "name": "Place", "description": "Description", "chapterNums": [1]},
+    {"type": "scene", "name": "Scene Title", "description": "What happens", "chapterNums": [3]}
+  ]
+}`;
+
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiKey}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: 8192,
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error?.message || 'API request failed');
+      }
+
+      const data = await response.json();
+      const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      
+      if (!content) {
+        throw new Error('No response from Gemini');
+      }
+
+      const cleanedContent = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      const parsed = JSON.parse(cleanedContent);
+      
+      const newEntities = parsed.entities.map((entity, index) => ({
+        ...entity,
+        id: generateId('ent'),
+        chapterRefs: (entity.chapterNums || [])
+          .map(num => currentProject.chapters[num - 1]?.id)
+          .filter(Boolean),
+        position: {
+          x: 80 + (index % 4) * 240,
+          y: 60 + Math.floor(index / 4) * 200
+        }
+      }));
+
+      newEntities.forEach(e => delete e.chapterNums);
+
+      setCurrentProject(prev => ({
+        ...prev,
+        entities: [...prev.entities, ...newEntities]
+      }));
+
+      setLoading(false);
+    } catch (error) {
+      console.error('Entity extraction failed:', error);
+      alert(`Extraction failed: ${error.message}`);
+      setLoading(false);
     }
   };
 
+  // Render library or editor view
+  if (view === 'library') {
+    return (
+      <div className="app-container">
+        <div className="library-header">
+          <h1>Bookboard</h1>
+          <div className="library-actions">
+            <button className="btn" onClick={() => setShowImportModal(true)}>Import</button>
+            <button className="btn btn-primary" onClick={createNewProject}>New Project</button>
+          </div>
+        </div>
+        
+        <div className="library-content">
+          {projectIndex.length === 0 ? (
+            <div className="empty-state">
+              <h2>No projects yet</h2>
+              <p>Import a manuscript or create a new project to get started.</p>
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginTop: '24px' }}>
+                <button className="btn" onClick={() => setShowImportModal(true)}>Import</button>
+                <button className="btn btn-primary" onClick={createNewProject}>New Project</button>
+              </div>
+            </div>
+          ) : (
+            <div className="project-grid">
+              {projectIndex
+                .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+                .map(project => (
+                  <div key={project.id} className="project-card" onClick={() => openProject(project.id)}>
+                    <button 
+                      className="project-delete" 
+                      onClick={(e) => { e.stopPropagation(); handleDeleteProject(project.id, project.title); }}
+                      title="Delete project"
+                    >
+                      ×
+                    </button>
+                    <h3>{project.title}</h3>
+                    <div className="project-meta">
+                      <span>{project.chapterCount || 0} chapters</span>
+                      <span>{project.entityCount || 0} cards</span>
+                    </div>
+                    <div className="project-date">
+                      Last edited: {new Date(project.updatedAt).toLocaleDateString()}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+
+        {showImportModal && (
+          <ImportModal
+            onImport={handleImport}
+            onClose={() => setShowImportModal(false)}
+          />
+        )}
+
+        {showImportConflictModal && pendingImport && (
+          <ImportConflictModal
+            existingTitle={pendingImport.existingProject.title}
+            onOverwrite={() => handleConflictResolution('overwrite')}
+            onCreateNew={() => handleConflictResolution('new')}
+            onCancel={() => handleConflictResolution('cancel')}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // Editor view
   return (
     <div className="app-container">
       <TopBar 
-        title={project.title}
+        title={currentProject.title}
         onTitleChange={updateTitle}
-        onNew={newProject}
+        onLibrary={goToLibrary}
         onImport={() => setShowImportModal(true)}
         onExport={() => setShowExportModal(true)}
+        onExtract={() => setShowExtractModal(true)}
+        hasChapters={currentProject.chapters.length > 0}
       />
       
       <div className="main-layout">
         <TimelinePanel 
-          chapters={project.chapters} 
+          chapters={currentProject.chapters} 
           onReorder={reorderChapters}
         />
         <Corkboard 
-          entities={project.entities}
-          chapters={project.chapters}
+          entities={currentProject.entities}
+          chapters={currentProject.chapters}
           onUpdatePosition={updateEntityPosition}
           onEditEntity={(entity) => { setEditingEntity(entity); setShowEntityModal(true); }}
           onDeleteEntity={deleteEntity}
-          isEmpty={project.chapters.length === 0 && project.entities.length === 0}
+          isEmpty={currentProject.chapters.length === 0 && currentProject.entities.length === 0}
           onImport={() => setShowImportModal(true)}
         />
       </div>
@@ -277,39 +680,71 @@ function App() {
         />
       )}
 
+      {showImportConflictModal && pendingImport && (
+        <ImportConflictModal
+          existingTitle={pendingImport.existingProject.title}
+          onOverwrite={() => handleConflictResolution('overwrite')}
+          onCreateNew={() => handleConflictResolution('new')}
+          onCancel={() => handleConflictResolution('cancel')}
+        />
+      )}
+
       {showExportModal && (
         <ExportModal
           onExportJson={exportAsJson}
-          onExportMarkdown={exportAsMarkdown}
+          onExportManuscript={exportManuscript}
+          onExportBible={exportBible}
+          hasChapters={currentProject.chapters.length > 0}
+          hasEntities={currentProject.entities.length > 0}
           onClose={() => setShowExportModal(false)}
+        />
+      )}
+
+      {showExtractModal && (
+        <ExtractModal
+          geminiKey={geminiKey}
+          onGeminiKeyChange={setGeminiKey}
+          onExtract={extractEntities}
+          onClose={() => setShowExtractModal(false)}
         />
       )}
 
       {showEntityModal && (
         <EntityModal
           entity={editingEntity}
-          chapters={project.chapters}
+          chapters={currentProject.chapters}
           onSave={saveEntity}
           onClose={() => { setShowEntityModal(false); setEditingEntity(null); }}
         />
+      )}
+
+      {loading && (
+        <div className="loading-overlay">
+          <div className="loading-spinner"></div>
+          <p>{loadingMessage}</p>
+        </div>
       )}
     </div>
   );
 }
 
-// Top Bar Component
-function TopBar({ title, onTitleChange, onNew, onImport, onExport }) {
+// Top Bar Component (Editor view)
+function TopBar({ title, onTitleChange, onLibrary, onImport, onExport, onExtract, hasChapters }) {
   return (
     <div className="top-bar">
+      <button className="btn btn-back" onClick={onLibrary} title="Back to library">←</button>
       <input
         type="text"
         value={title}
         onChange={(e) => onTitleChange(e.target.value)}
         placeholder="Novel Title"
       />
-      <button className="btn" onClick={onNew}>New</button>
+      <div className="top-bar-spacer"></div>
       <button className="btn" onClick={onImport}>Import</button>
-      <button className="btn btn-primary" onClick={onExport}>Export Bible</button>
+      {hasChapters && (
+        <button className="btn btn-secondary" onClick={onExtract}>Extract</button>
+      )}
+      <button className="btn btn-primary" onClick={onExport}>Export</button>
     </div>
   );
 }
@@ -383,7 +818,7 @@ function Corkboard({ entities, chapters, onUpdatePosition, onEditEntity, onDelet
         <div className="empty-state">
           <h2>Your corkboard is empty</h2>
           <p>
-            Import a manuscript (Markdown) or a pre-processed bible (JSON) to get started.
+            Import a manuscript (Markdown) or a project file (JSON) to get started.
             You can also manually add cards using the + button.
           </p>
           <button className="btn btn-primary" onClick={onImport}>Import</button>
@@ -449,7 +884,6 @@ function EntityCard({ entity, chapters, onUpdatePosition, onEdit, onDelete }) {
     }
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
-  // Get chapter names for display
   const chapterNames = (entity.chapterRefs || [])
     .map(id => {
       const ch = chapters.find(c => c.id === id);
@@ -520,15 +954,15 @@ function ImportModal({ onImport, onClose }) {
         >
           <p><strong>Drop a file here</strong> or click to browse</p>
           <p style={{ fontSize: '0.8rem', color: 'var(--ink-light)', marginTop: '12px' }}>
-            Supports <strong>.md</strong> (Markdown) or <strong>.json</strong> (Bible format)
+            Supports <strong>.md</strong> (Markdown) or <strong>.json</strong> (Project file)
           </p>
         </div>
 
         <p className="help-text">
-          <strong>Markdown:</strong> Chapters parsed from # or ## headers. Content between headers becomes chapter text.
+          <strong>Markdown:</strong> # is book title, ## headers become chapters.
         </p>
         <p className="help-text">
-          <strong>JSON:</strong> Full bible format with chapters and entities. Use this to restore a previous export.
+          <strong>JSON:</strong> Full project format with chapters and entities.
         </p>
 
         <input
@@ -550,34 +984,128 @@ function ImportModal({ onImport, onClose }) {
   );
 }
 
+// Import Conflict Modal
+function ImportConflictModal({ existingTitle, onOverwrite, onCreateNew, onCancel }) {
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <h2>Project Already Exists</h2>
+        <p style={{ marginBottom: '24px' }}>
+          A project called "<strong>{existingTitle}</strong>" already exists. What would you like to do?
+        </p>
+        
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <button className="btn btn-primary" onClick={onOverwrite}>
+            Overwrite Existing
+          </button>
+          <button className="btn btn-secondary" onClick={onCreateNew}>
+            Create as New Version
+          </button>
+          <button className="btn" onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Export Modal Component
-function ExportModal({ onExportJson, onExportMarkdown, onClose }) {
+function ExportModal({ onExportJson, onExportManuscript, onExportBible, hasChapters, hasEntities, onClose }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
-        <h2>Export Bible</h2>
-        <p style={{ marginBottom: '24px', color: 'var(--ink-light)' }}>
-          Choose your export format:
-        </p>
+        <h2>Export</h2>
         
-        <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
-          <button className="btn btn-primary" style={{ flex: 1 }} onClick={() => { onExportJson(); onClose(); }}>
-            JSON
-          </button>
-          <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => { onExportMarkdown(); onClose(); }}>
-            Markdown
-          </button>
-        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {hasChapters && (
+            <div>
+              <button 
+                className="btn btn-primary" 
+                style={{ width: '100%' }} 
+                onClick={() => { onExportManuscript(); onClose(); }}
+              >
+                Export Manuscript
+              </button>
+              <p className="help-text" style={{ marginTop: '8px' }}>
+                Full novel text in chapter order. Ready to paste back into your editor.
+              </p>
+            </div>
+          )}
 
-        <p className="help-text">
-          <strong>JSON:</strong> Complete data format. Best for backup and re-importing later.
-        </p>
-        <p className="help-text">
-          <strong>Markdown:</strong> Human-readable document. Good for sharing or reference.
-        </p>
+          {hasEntities && (
+            <div>
+              <button 
+                className="btn btn-secondary" 
+                style={{ width: '100%' }} 
+                onClick={() => { onExportBible(); onClose(); }}
+              >
+                Export Bible
+              </button>
+              <p className="help-text" style={{ marginTop: '8px' }}>
+                Characters, themes, locations, scenes. Reference document for your story.
+              </p>
+            </div>
+          )}
+
+          <div>
+            <button 
+              className="btn" 
+              style={{ width: '100%' }} 
+              onClick={() => { onExportJson(); onClose(); }}
+            >
+              Export Project (JSON)
+            </button>
+            <p className="help-text" style={{ marginTop: '8px' }}>
+              Complete project data. Use for backup or sharing.
+            </p>
+          </div>
+        </div>
 
         <div className="modal-actions">
           <button className="btn" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Extract Modal Component (Gemini API)
+function ExtractModal({ geminiKey, onGeminiKeyChange, onExtract, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <h2>Extract Entities</h2>
+        <p style={{ marginBottom: '20px', color: 'var(--ink-light)' }}>
+          Use Gemini AI to automatically extract characters, themes, locations, and key scenes from your manuscript.
+        </p>
+        
+        <div className="api-key-section">
+          <label>Gemini API Key</label>
+          <input
+            type="password"
+            value={geminiKey}
+            onChange={(e) => onGeminiKeyChange(e.target.value)}
+            placeholder="AIza..."
+            style={{ fontFamily: "'JetBrains Mono', monospace" }}
+          />
+          <p className="help-text" style={{ marginTop: '8px' }}>
+            Get a key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--blue-pin)' }}>aistudio.google.com/apikey</a>
+          </p>
+          <p className="help-text">
+            Your key is stored only in your browser's localStorage.
+          </p>
+        </div>
+
+        <div className="modal-actions">
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button 
+            className="btn btn-primary" 
+            onClick={onExtract}
+            disabled={!geminiKey}
+          >
+            Extract
+          </button>
         </div>
       </div>
     </div>
