@@ -275,6 +275,50 @@ function App() {
     setShowMergeModal(false);
   };
 
+  // Rearrange entities in a folder to grid layout
+  const rearrangeEntities = (entityIds) => {
+    setCurrentProject(prev => {
+      // Get the entities to rearrange
+      const toRearrange = prev.entities.filter(e => entityIds.includes(e.id));
+      
+      // Sort by first chapter/story appearance
+      const extractableChapters = prev.chapters.filter(ch => !ch.isFrontMatter);
+      toRearrange.sort((a, b) => {
+        const getFirstAppearance = (entity) => {
+          if (entity.chapterRefs && entity.chapterRefs.length > 0) {
+            const indices = entity.chapterRefs
+              .map(ref => extractableChapters.findIndex(ch => ch.id === ref))
+              .filter(i => i >= 0);
+            return indices.length > 0 ? Math.min(...indices) : 999;
+          }
+          return 999;
+        };
+        return getFirstAppearance(a) - getFirstAppearance(b);
+      });
+      
+      // Calculate new positions in grid
+      const cardWidth = 240;
+      const cardHeight = 180;
+      const cardsPerRow = 5;
+      const startX = 40;
+      const startY = 40;
+      
+      const newPositions = {};
+      toRearrange.forEach((entity, i) => {
+        const col = i % cardsPerRow;
+        const row = Math.floor(i / cardsPerRow);
+        newPositions[entity.id] = { x: startX + col * cardWidth, y: startY + row * cardHeight };
+      });
+      
+      return {
+        ...prev,
+        entities: prev.entities.map(e => 
+          newPositions[e.id] ? { ...e, position: newPositions[e.id] } : e
+        )
+      };
+    });
+  };
+
   // Reorder chapters
   const reorderChapters = (fromIndex, toIndex) => {
     setCurrentProject(prev => {
@@ -1114,6 +1158,7 @@ Respond ONLY with valid JSON (no markdown fences, no explanation):
             onAddFolder={() => setShowAddFolderModal(true)}
             onDeleteCustomFolder={deleteCustomFolder}
             onMergeEntities={(selected) => mergeEntities(selected[0], selected[1])}
+            onRearrangeEntities={rearrangeEntities}
           />
         )}
       </div>
@@ -1288,7 +1333,8 @@ function Corkboard({
   onAddEntity,
   onAddFolder,
   onDeleteCustomFolder,
-  onMergeEntities
+  onMergeEntities,
+  onRearrangeEntities
 }) {
   const [activeFolder, setActiveFolder] = useState(null);
   const [isCustomFolder, setIsCustomFolder] = useState(false);
@@ -1432,19 +1478,28 @@ function Corkboard({
             </>
           )}
           {folderEntities.length >= 2 && (
-            <button 
-              className={`btn btn-merge ${selectedForMerge.length === 2 ? 'ready' : ''}`}
-              onClick={() => {
-                if (selectedForMerge.length === 2) {
-                  onMergeEntities(selectedForMerge);
-                  setSelectedForMerge([]);
-                }
-              }}
-              disabled={selectedForMerge.length !== 2}
-              title={selectedForMerge.length === 2 ? "Merge selected cards" : "Shift+click 2 cards to merge"}
-            >
-              {selectedForMerge.length === 2 ? '🔗 Merge' : '🔗'}
-            </button>
+            <>
+              <button 
+                className="btn btn-rearrange"
+                onClick={() => onRearrangeEntities(folderEntities.map(e => e.id))}
+                title="Rearrange cards in grid"
+              >
+                ⊞
+              </button>
+              <button 
+                className={`btn btn-merge ${selectedForMerge.length === 2 ? 'ready' : ''}`}
+                onClick={() => {
+                  if (selectedForMerge.length === 2) {
+                    onMergeEntities(selectedForMerge);
+                    setSelectedForMerge([]);
+                  }
+                }}
+                disabled={selectedForMerge.length !== 2}
+                title={selectedForMerge.length === 2 ? "Merge selected cards" : "Shift+click 2 cards to merge"}
+              >
+                {selectedForMerge.length === 2 ? '🔗 Merge' : '🔗'}
+              </button>
+            </>
           )}
           <span className="esc-hint">{selectedForMerge.length > 0 ? 'ESC to clear selection' : 'ESC to go back'}</span>
         </div>

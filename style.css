@@ -961,7 +961,6 @@ body {
 .btn-merge {
   background: var(--cork-dark);
   padding: 4px 12px;
-  margin-left: auto;
   opacity: 0.6;
 }
 
@@ -972,6 +971,18 @@ body {
 
 .btn-merge:disabled {
   cursor: default;
+}
+
+/* Rearrange button */
+.btn-rearrange {
+  background: var(--cork-dark);
+  padding: 4px 12px;
+  margin-left: auto;
+  font-size: 1rem;
+}
+
+.btn-rearrange:hover {
+  background: var(--green-pin);
 }
 
 .entity-card.selected-for-merge {
