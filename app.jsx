@@ -8,7 +8,34 @@ const STORAGE_KEYS = {
   projectIndex: 'bookboard-index',
   projectPrefix: 'bookboard-project-',
   geminiKey: 'bookboard-gemini-key',
-  lastOpenedProject: 'bookboard-last-opened'
+  lastOpenedProject: 'bookboard-last-opened',
+  debugMode: 'bookboard-debug-mode'
+};
+
+// Debug log storage (in memory, not persisted)
+let debugLog = [];
+const log = (message, data = null) => {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    message,
+    data: data ? JSON.stringify(data, null, 2) : null
+  };
+  debugLog.push(entry);
+  console.log(`[Bookboard] ${message}`, data || '');
+};
+
+const clearLog = () => {
+  debugLog = [];
+};
+
+const getLogText = () => {
+  return debugLog.map(entry => {
+    let line = `[${entry.timestamp}] ${entry.message}`;
+    if (entry.data) {
+      line += `\n${entry.data}`;
+    }
+    return line;
+  }).join('\n\n');
 };
 
 // Default empty project
@@ -80,6 +107,7 @@ function App() {
   const [showExportModal, setShowExportModal] = useState(false);
   const [showEntityModal, setShowEntityModal] = useState(false);
   const [showExtractModal, setShowExtractModal] = useState(false);
+  const [showExtractConfirmModal, setShowExtractConfirmModal] = useState(false);
   const [showImportConflictModal, setShowImportConflictModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [pendingImport, setPendingImport] = useState(null);
@@ -88,6 +116,12 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
   const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem(STORAGE_KEYS.geminiKey) || '');
+  const [debugMode, setDebugMode] = useState(() => localStorage.getItem(STORAGE_KEYS.debugMode) === 'true');
+
+  // Save debug mode when it changes
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.debugMode, debugMode.toString());
+  }, [debugMode]);
 
   // Save Gemini key when it changes
   useEffect(() => {
@@ -498,7 +532,57 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
-  // Extract entities using Gemini API
+  // Find empty position for new entity card
+  const findEmptyPosition = (existingEntities, startX = 80, startY = 60) => {
+    const cardWidth = 240;
+    const cardHeight = 200;
+    const maxX = 1600;
+    
+    let x = startX;
+    let y = startY;
+    
+    const isOverlapping = (testX, testY) => {
+      return existingEntities.some(e => {
+        const ex = e.position?.x || 0;
+        const ey = e.position?.y || 0;
+        return Math.abs(testX - ex) < cardWidth && Math.abs(testY - ey) < cardHeight;
+      });
+    };
+    
+    while (isOverlapping(x, y)) {
+      x += cardWidth;
+      if (x > maxX) {
+        x = startX;
+        y += cardHeight;
+      }
+    }
+    
+    return { x, y };
+  };
+
+  // Handle extract button - check if entities exist
+  const handleExtractClick = () => {
+    if (currentProject.entities.length > 0) {
+      setShowExtractConfirmModal(true);
+    } else {
+      setShowExtractModal(true);
+    }
+  };
+
+  // Clear entities and start fresh extraction
+  const handleClearAndExtract = () => {
+    setCurrentProject(prev => ({ ...prev, entities: [] }));
+    setShowExtractConfirmModal(false);
+    setShowExtractModal(true);
+  };
+
+  // Add to existing entities
+  const handleAddToExisting = () => {
+    setShowExtractConfirmModal(false);
+    setShowExtractModal(true);
+  };
+
+  // Extract entities using Gemini API - with chunking for large documents
   const extractEntities = async () => {
     if (!geminiKey) {
       alert('Please enter your Gemini API key');
@@ -511,115 +595,178 @@ function App() {
     }
 
     setLoading(true);
-    setLoadingMessage('Analysing manuscript...');
     setShowExtractModal(false);
+    clearLog();
+    log('Starting extraction', { chapterCount: currentProject.chapters.length });
 
-    const fullText = currentProject.chapters.map((ch, i) => `## Chapter ${i + 1}: ${ch.title}\n${ch.content}`).join('\n\n');
-    
-    // Truncate if very long, but allow more than before
-    const truncatedText = fullText.substring(0, 80000);
     const chapterCount = currentProject.chapters.length;
+    const allNewEntities = [];
+    
+    // Process in chunks of chapters to avoid token limits
+    const chunkSize = 3; // Process 3 chapters at a time
+    const chunks = [];
+    
+    for (let i = 0; i < chapterCount; i += chunkSize) {
+      chunks.push(currentProject.chapters.slice(i, i + chunkSize));
+    }
+    
+    log('Processing in chunks', { totalChunks: chunks.length, chunkSize });
 
-    const prompt = `Analyse this novel excerpt and extract the following entities. For each entity, provide a JSON object.
+    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+      const chunk = chunks[chunkIndex];
+      const startChapterNum = chunkIndex * chunkSize + 1;
+      
+      setLoadingMessage(`Analysing chapters ${startChapterNum}-${startChapterNum + chunk.length - 1} of ${chapterCount}...`);
+      
+      const chunkText = chunk.map((ch, i) => 
+        `## Chapter ${startChapterNum + i}: ${ch.title}\n${ch.content}`
+      ).join('\n\n');
+      
+      log(`Processing chunk ${chunkIndex + 1}`, { 
+        chapters: chunk.map((c, i) => startChapterNum + i),
+        textLength: chunkText.length 
+      });
+
+      const prompt = `Analyse this novel excerpt and extract entities. This is chapters ${startChapterNum}-${startChapterNum + chunk.length - 1} of a ${chapterCount}-chapter novel.
 
 TEXT:
-${truncatedText}
+${chunkText}
 
-There are ${chapterCount} chapters in total.
+Extract from THESE chapters only:
+1. CHARACTERS: People mentioned by name in these chapters. Include their role/description.
+2. THEMES: Major themes or motifs evident in these chapters.
+3. LOCATIONS: Named places or settings in these chapters.
+4. SCENES: Extract AT LEAST ONE significant scene per chapter. You have ${chunk.length} chapters here, so provide at least ${chunk.length} scenes. Each scene should capture the key action or development in that chapter.
 
-Extract:
-1. CHARACTERS: People mentioned by name. Include their role/description and which chapter numbers they appear in (1-indexed).
-2. THEMES: Major themes or motifs you identify (typically 3-6 themes).
-3. LOCATIONS: Named places or settings.
-4. SCENES: Extract AT LEAST ONE significant scene per chapter. Each scene should capture what happens in that chapter - the key action, conflict, or development. You must have at least ${chapterCount} scenes (one per chapter minimum).
+For chapterNums, use the actual chapter numbers (${startChapterNum}-${startChapterNum + chunk.length - 1}).
 
-Respond ONLY with valid JSON in this exact format (no markdown code fences, no explanation, just the JSON):
+Respond ONLY with valid JSON (no markdown fences, no explanation):
 {
   "entities": [
-    {"type": "character", "name": "Name", "description": "Brief description", "chapterNums": [1, 2]},
-    {"type": "theme", "name": "Theme Name", "description": "How it manifests", "chapterNums": []},
-    {"type": "location", "name": "Place", "description": "Description", "chapterNums": [1]},
-    {"type": "scene", "name": "Scene Title", "description": "What happens", "chapterNums": [1]}
+    {"type": "character", "name": "Name", "description": "Brief description", "chapterNums": [${startChapterNum}]},
+    {"type": "theme", "name": "Theme Name", "description": "How it manifests", "chapterNums": [${startChapterNum}]},
+    {"type": "location", "name": "Place", "description": "Description", "chapterNums": [${startChapterNum}]},
+    {"type": "scene", "name": "Scene Title", "description": "What happens", "chapterNums": [${startChapterNum}]}
   ]
 }`;
 
-    try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.3,
-            maxOutputTokens: 16384,
-          }
-        })
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error?.message || 'API request failed');
-      }
-
-      const data = await response.json();
-      const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      
-      if (!content) {
-        throw new Error('No response from Gemini');
-      }
-
-      // Clean up response (remove markdown fences if present)
-      let cleanedContent = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      
-      // Try to parse, with better error handling for truncated JSON
-      let parsed;
       try {
-        parsed = JSON.parse(cleanedContent);
-      } catch (parseError) {
-        // If JSON is truncated, try to salvage what we can
-        console.error('JSON parse error, attempting to salvage:', parseError);
+        log('Sending API request', { promptLength: prompt.length });
         
-        // Try to find the last complete entity
-        const lastBracket = cleanedContent.lastIndexOf('}');
-        if (lastBracket > 0) {
-          cleanedContent = cleanedContent.substring(0, lastBracket + 1) + ']}';
-          try {
-            parsed = JSON.parse(cleanedContent);
-            console.log('Salvaged partial JSON response');
-          } catch (e) {
-            throw new Error('Response was truncated and could not be recovered. Try with a shorter manuscript or extract in sections.');
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: 0.3,
+              maxOutputTokens: 8192,
+            }
+          })
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          log('API error', error);
+          throw new Error(error.error?.message || 'API request failed');
+        }
+
+        const data = await response.json();
+        const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        
+        log('API response received', { 
+          contentLength: content?.length,
+          finishReason: data.candidates?.[0]?.finishReason 
+        });
+        
+        if (!content) {
+          log('No content in response', data);
+          throw new Error('No response from Gemini');
+        }
+
+        let cleanedContent = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        
+        let parsed;
+        try {
+          parsed = JSON.parse(cleanedContent);
+          log('JSON parsed successfully', { entityCount: parsed.entities?.length });
+        } catch (parseError) {
+          log('JSON parse error, attempting salvage', { error: parseError.message });
+          const lastBracket = cleanedContent.lastIndexOf('}');
+          if (lastBracket > 0) {
+            cleanedContent = cleanedContent.substring(0, lastBracket + 1) + ']}';
+            try {
+              parsed = JSON.parse(cleanedContent);
+              log('Salvaged partial JSON', { entityCount: parsed.entities?.length });
+            } catch (e) {
+              log('Salvage failed', { error: e.message });
+              continue; // Skip this chunk but continue with others
+            }
+          } else {
+            continue;
           }
-        } else {
-          throw new Error('Response was truncated. Try with a shorter manuscript or extract in sections.');
+        }
+        
+        // Add entities from this chunk
+        if (parsed.entities) {
+          allNewEntities.push(...parsed.entities);
+        }
+        
+      } catch (error) {
+        log('Chunk extraction failed', { error: error.message, chunkIndex });
+        console.error(`Chunk ${chunkIndex + 1} extraction failed:`, error);
+        // Continue with other chunks
+      }
+    }
+
+    log('All chunks processed', { totalEntities: allNewEntities.length });
+
+    // Deduplicate entities by name+type
+    const seen = new Set();
+    const deduped = [];
+    for (const entity of allNewEntities) {
+      const key = `${entity.type}:${entity.name.toLowerCase()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        deduped.push(entity);
+      } else {
+        // Merge chapter refs for duplicates
+        const existing = deduped.find(e => `${e.type}:${e.name.toLowerCase()}` === key);
+        if (existing && entity.chapterNums) {
+          existing.chapterNums = [...new Set([...(existing.chapterNums || []), ...entity.chapterNums])];
         }
       }
-      
-      const newEntities = parsed.entities.map((entity, index) => ({
+    }
+    
+    log('Deduplication complete', { before: allNewEntities.length, after: deduped.length });
+
+    // Position entities, avoiding existing ones
+    const existingEntities = [...currentProject.entities];
+    const finalEntities = deduped.map((entity) => {
+      const position = findEmptyPosition([...existingEntities, ...finalEntities.filter(e => e.position)]);
+      const newEntity = {
         ...entity,
         id: generateId('ent'),
         chapterRefs: (entity.chapterNums || [])
           .map(num => currentProject.chapters[num - 1]?.id)
           .filter(Boolean),
-        position: {
-          x: 80 + (index % 4) * 240,
-          y: 60 + Math.floor(index / 4) * 200
-        }
-      }));
+        position
+      };
+      delete newEntity.chapterNums;
+      return newEntity;
+    });
 
-      newEntities.forEach(e => delete e.chapterNums);
+    log('Final entities positioned', { count: finalEntities.length });
 
-      setCurrentProject(prev => ({
-        ...prev,
-        entities: [...prev.entities, ...newEntities]
-      }));
+    setCurrentProject(prev => ({
+      ...prev,
+      entities: [...prev.entities, ...finalEntities]
+    }));
 
-      setLoading(false);
-    } catch (error) {
-      console.error('Entity extraction failed:', error);
-      alert(`Extraction failed: ${error.message}`);
-      setLoading(false);
+    setLoading(false);
+    
+    if (debugMode) {
+      console.log('Extraction complete. Debug log available in Settings.');
     }
   };
 
@@ -693,6 +840,8 @@ Respond ONLY with valid JSON in this exact format (no markdown code fences, no e
           <SettingsModal
             geminiKey={geminiKey}
             onGeminiKeyChange={setGeminiKey}
+            debugMode={debugMode}
+            onDebugModeChange={setDebugMode}
             onClose={() => setShowSettingsModal(false)}
           />
         )}
@@ -709,7 +858,7 @@ Respond ONLY with valid JSON in this exact format (no markdown code fences, no e
         onLibrary={goToLibrary}
         onImport={() => setShowImportModal(true)}
         onExport={() => setShowExportModal(true)}
-        onExtract={() => setShowExtractModal(true)}
+        onExtract={handleExtractClick}
         hasChapters={currentProject.chapters.length > 0}
       />
       
@@ -782,6 +931,15 @@ Respond ONLY with valid JSON in this exact format (no markdown code fences, no e
           onGeminiKeyChange={setGeminiKey}
           onExtract={extractEntities}
           onClose={() => setShowExtractModal(false)}
+        />
+      )}
+
+      {showExtractConfirmModal && (
+        <ExtractConfirmModal
+          entityCount={currentProject.entities.length}
+          onClearAndExtract={handleClearAndExtract}
+          onAddToExisting={handleAddToExisting}
+          onCancel={() => setShowExtractConfirmModal(false)}
         />
       )}
 
@@ -924,18 +1082,11 @@ function ChapterEditor({ chapter, chapterIndex, onUpdateContent, onUpdateTitle, 
   const [content, setContent] = useState(chapter.content);
   const textareaRef = useRef(null);
 
-  // Update parent on changes (debounced via onBlur for performance)
-  const handleTitleBlur = () => {
-    if (title !== chapter.title) {
-      onUpdateTitle(title);
-    }
-  };
-
-  const handleContentBlur = () => {
-    if (content !== chapter.content) {
-      onUpdateContent(content);
-    }
-  };
+  // Sync state when chapter changes
+  useEffect(() => {
+    setTitle(chapter.title);
+    setContent(chapter.content);
+  }, [chapter.id, chapter.title, chapter.content]);
 
   // Also save on every change for auto-save feel
   useEffect(() => {
@@ -945,7 +1096,7 @@ function ChapterEditor({ chapter, chapterIndex, onUpdateContent, onUpdateTitle, 
       }
     }, 1000);
     return () => clearTimeout(timer);
-  }, [content]);
+  }, [content, chapter.content, onUpdateContent]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -954,7 +1105,7 @@ function ChapterEditor({ chapter, chapterIndex, onUpdateContent, onUpdateTitle, 
       }
     }, 500);
     return () => clearTimeout(timer);
-  }, [title]);
+  }, [title, chapter.title, onUpdateTitle]);
 
   // Word count
   const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
@@ -969,7 +1120,6 @@ function ChapterEditor({ chapter, chapterIndex, onUpdateContent, onUpdateTitle, 
           className="chapter-editor-title"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          onBlur={handleTitleBlur}
           placeholder="Chapter title..."
         />
         <span className="chapter-editor-wordcount">{wordCount.toLocaleString()} words</span>
@@ -979,7 +1129,6 @@ function ChapterEditor({ chapter, chapterIndex, onUpdateContent, onUpdateTitle, 
         className="chapter-editor-content"
         value={content}
         onChange={(e) => setContent(e.target.value)}
-        onBlur={handleContentBlur}
         placeholder="Start writing..."
       />
     </div>
@@ -1155,6 +1304,40 @@ function ImportConflictModal({ existingTitle, onOverwrite, onCreateNew, onCancel
   );
 }
 
+// Extract Confirm Modal (when entities already exist)
+function ExtractConfirmModal({ entityCount, onClearAndExtract, onAddToExisting, onCancel }) {
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <h2>Entities Already Exist</h2>
+        <p style={{ marginBottom: '24px' }}>
+          This project already has <strong>{entityCount}</strong> cards on the corkboard. What would you like to do?
+        </p>
+        
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <button className="btn btn-primary" onClick={onClearAndExtract}>
+            Clear All & Re-extract
+          </button>
+          <p className="help-text" style={{ marginTop: '-4px' }}>
+            Remove all existing cards and extract fresh from the manuscript.
+          </p>
+          
+          <button className="btn btn-secondary" onClick={onAddToExisting}>
+            Add to Existing
+          </button>
+          <p className="help-text" style={{ marginTop: '-4px' }}>
+            Keep existing cards and add newly extracted ones.
+          </p>
+          
+          <button className="btn" onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Export Modal Component
 function ExportModal({ onExportJson, onExportManuscript, onExportBible, hasChapters, hasEntities, onClose }) {
   return (
@@ -1216,8 +1399,23 @@ function ExportModal({ onExportJson, onExportManuscript, onExportBible, hasChapt
 }
 
 // Settings Modal Component
-function SettingsModal({ geminiKey, onGeminiKeyChange, onClose }) {
+function SettingsModal({ geminiKey, onGeminiKeyChange, debugMode, onDebugModeChange, onClose }) {
   const [showKey, setShowKey] = useState(false);
+  
+  const downloadLog = () => {
+    const logText = getLogText();
+    if (!logText) {
+      alert('No debug log available. Run an extraction first with debug mode enabled.');
+      return;
+    }
+    const blob = new Blob([logText], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `bookboard-debug-${new Date().toISOString().slice(0, 10)}.log`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
   
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -1261,6 +1459,26 @@ function SettingsModal({ geminiKey, onGeminiKeyChange, onClose }) {
               Your key is stored only in your browser—it's never sent anywhere except directly to Google's API.
             </p>
           </div>
+        </div>
+
+        <div className="settings-section">
+          <h3>Debug Mode</h3>
+          <label className="toggle-label">
+            <input
+              type="checkbox"
+              checked={debugMode}
+              onChange={(e) => onDebugModeChange(e.target.checked)}
+            />
+            <span>Enable debug logging</span>
+          </label>
+          <p className="help-text" style={{ marginTop: '8px' }}>
+            When enabled, extraction operations are logged for troubleshooting.
+          </p>
+          {debugMode && (
+            <button className="btn" style={{ marginTop: '12px' }} onClick={downloadLog}>
+              Download Debug Log
+            </button>
+          )}
         </div>
 
         <div className="modal-actions">
