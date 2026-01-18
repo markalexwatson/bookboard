@@ -1,0 +1,95 @@
+{
+  "title": "The Compliant Man",
+  "chapters": [
+    {
+      "id": "ch-1",
+      "title": "Form 27-B",
+      "content": "The form arrived on a Tuesday, as all significant forms do. Martin Kessler examined it with the careful attention he gave to everything the Department sent. Section 4a required his signature. Section 4b required his soul. He signed both without hesitation.",
+      "order": 1
+    },
+    {
+      "id": "ch-2", 
+      "title": "The Orientation",
+      "content": "The orientation room smelled of new carpet and old fear. Forty-seven other compliant citizens sat in identical chairs, their postures identical, their expressions carefully neutral. The facilitator smiled the smile of someone who had read a manual on smiling.",
+      "order": 2
+    },
+    {
+      "id": "ch-3",
+      "title": "Productivity Metrics",
+      "content": "Martin's productivity score rose by 3.2% in the first quarter. His supervisor noted this in his file with neither praise nor concern. The number simply was. Martin understood that he simply was, too—a variable in an equation he would never see.",
+      "order": 3
+    },
+    {
+      "id": "ch-4",
+      "title": "The Anomaly",
+      "content": "On the 847th day, Martin noticed a discrepancy in Form 19-C. A box that should have been checked was not. He stared at it for eleven minutes before reporting himself to Compliance. They thanked him for his vigilance. The thanking took four hours.",
+      "order": 4
+    }
+  ],
+  "entities": [
+    {
+      "id": "ent-1",
+      "type": "character",
+      "name": "Martin Kessler",
+      "description": "Mid-level functionary. Compliant to a fault. Finds meaning in following procedures correctly. Never questions, only processes.",
+      "chapterRefs": ["ch-1", "ch-2", "ch-3", "ch-4"],
+      "position": { "x": 80, "y": 60 }
+    },
+    {
+      "id": "ent-2",
+      "type": "character", 
+      "name": "The Facilitator",
+      "description": "Unnamed orientation leader. Trained in the appearance of warmth. Represents the human face of inhuman systems.",
+      "chapterRefs": ["ch-2"],
+      "position": { "x": 80, "y": 280 }
+    },
+    {
+      "id": "ent-3",
+      "type": "theme",
+      "name": "Complicity Through Compliance",
+      "description": "The violence of going along. How ordinary people maintain systems that harm them. The comfort of not choosing.",
+      "chapterRefs": ["ch-1", "ch-3", "ch-4"],
+      "position": { "x": 350, "y": 60 }
+    },
+    {
+      "id": "ent-4",
+      "type": "theme",
+      "name": "Bureaucracy as Horror",
+      "description": "Forms and procedures as instruments of dehumanisation. The banality of evil rendered in triplicate.",
+      "chapterRefs": ["ch-1", "ch-4"],
+      "position": { "x": 350, "y": 260 }
+    },
+    {
+      "id": "ent-5",
+      "type": "location",
+      "name": "The Department",
+      "description": "Never named, never described in full. Exists through its forms, its procedures, its weight. Kafka's Castle by way of open-plan offices.",
+      "chapterRefs": ["ch-1", "ch-2", "ch-3", "ch-4"],
+      "position": { "x": 620, "y": 60 }
+    },
+    {
+      "id": "ent-6",
+      "type": "scene",
+      "name": "The Signing",
+      "description": "Martin signs away his soul without hesitation. The horror is not the act but the absence of resistance. Key establishing moment.",
+      "chapterRefs": ["ch-1"],
+      "position": { "x": 620, "y": 260 }
+    },
+    {
+      "id": "ent-7",
+      "type": "scene",
+      "name": "Self-Reporting",
+      "description": "Martin reports his own minor infraction. The system has colonised his conscience. Climactic moment of complicity.",
+      "chapterRefs": ["ch-4"],
+      "position": { "x": 620, "y": 420 }
+    },
+    {
+      "id": "ent-8",
+      "type": "idea",
+      "name": "The Thanking",
+      "description": "Four hours of being thanked. Gratitude as punishment. Explore the weaponisation of positive language.",
+      "chapterRefs": ["ch-4"],
+      "position": { "x": 350, "y": 420 }
+    }
+  ]
+}
