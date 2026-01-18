@@ -4,7 +4,7 @@ const { useState, useEffect, useRef, useCallback } = React;
 const generateId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
 // App version
-const APP_VERSION = '2.0';
+const APP_VERSION = '2.1';
 
 // Storage keys
 const STORAGE_KEYS = {
@@ -115,10 +115,12 @@ function App() {
   const [showImportConflictModal, setShowImportConflictModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showAddFolderModal, setShowAddFolderModal] = useState(false);
+  const [showMergeModal, setShowMergeModal] = useState(false);
   const [pendingImport, setPendingImport] = useState(null);
   const [editingEntity, setEditingEntity] = useState(null);
   const [editingChapterId, setEditingChapterId] = useState(null);
   const [defaultEntityType, setDefaultEntityType] = useState(null); // For add button in folders
+  const [bookType, setBookType] = useState('novel'); // 'novel' or 'collection'
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
   const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem(STORAGE_KEYS.geminiKey) || '');
@@ -252,6 +254,27 @@ function App() {
     setDefaultEntityType(null);
   };
 
+  // Merge two entities of the same type
+  const mergeEntities = (keepEntity, mergeEntity) => {
+    setCurrentProject(prev => {
+      const merged = {
+        ...keepEntity,
+        description: [keepEntity.description, mergeEntity.description].filter(Boolean).join('\n\n'),
+        chapterRefs: [...new Set([...(keepEntity.chapterRefs || []), ...(mergeEntity.chapterRefs || [])])],
+        storyRefs: keepEntity.storyRefs || mergeEntity.storyRefs 
+          ? [...new Set([...(keepEntity.storyRefs || []), ...(mergeEntity.storyRefs || [])])]
+          : undefined
+      };
+      return {
+        ...prev,
+        entities: prev.entities
+          .filter(e => e.id !== mergeEntity.id)
+          .map(e => e.id === keepEntity.id ? merged : e)
+      };
+    });
+    setShowMergeModal(false);
+  };
+
   // Reorder chapters
   const reorderChapters = (fromIndex, toIndex) => {
     setCurrentProject(prev => {
@@ -297,6 +320,8 @@ function App() {
     let bookTitle = null;
     let currentChapter = null;
     let contentBuffer = [];
+    let frontMatterBuffer = [];
+    let foundFirstChapter = false;
 
     for (const line of lines) {
       const h1Match = line.match(/^#\s+(.+)$/);
@@ -308,6 +333,21 @@ function App() {
       }
       
       if (h2Match) {
+        // Save any front matter before first chapter
+        if (!foundFirstChapter && frontMatterBuffer.length > 0) {
+          const frontMatterContent = frontMatterBuffer.join('\n').trim();
+          if (frontMatterContent) {
+            chapters.push({
+              id: generateId('ch'),
+              title: 'Front Matter',
+              content: frontMatterContent,
+              order: 0,
+              isFrontMatter: true
+            });
+          }
+        }
+        foundFirstChapter = true;
+        
         if (currentChapter) {
           currentChapter.content = contentBuffer.join('\n').trim();
           chapters.push(currentChapter);
@@ -321,6 +361,9 @@ function App() {
         contentBuffer = [];
       } else if (currentChapter) {
         contentBuffer.push(line);
+      } else if (bookTitle !== null) {
+        // Content after title but before first chapter = front matter
+        frontMatterBuffer.push(line);
       }
     }
 
@@ -332,6 +375,15 @@ function App() {
     if (chapters.length === 0) {
       return parseMarkdownFallback(markdown);
     }
+
+    // Re-number chapters to ensure front matter is 0 and others start at 1
+    chapters.forEach((ch, i) => {
+      if (ch.isFrontMatter) {
+        ch.order = 0;
+      } else {
+        ch.order = i + (chapters[0]?.isFrontMatter ? 0 : 1);
+      }
+    });
 
     return { bookTitle, chapters };
   };
@@ -640,7 +692,7 @@ function App() {
   };
 
   // Extract entities using Gemini API
-  const extractEntities = async () => {
+  const extractEntities = async (isCollection = false) => {
     if (!geminiKey) {
       alert('Please enter your Gemini API key');
       return;
@@ -657,12 +709,14 @@ function App() {
     clearLog();
     
     try {
-      const chapterCount = currentProject.chapters.length;
-      log('Starting extraction', { chapterCount });
+      // Filter out front matter from extraction
+      const extractableChapters = currentProject.chapters.filter(ch => !ch.isFrontMatter);
+      const chapterCount = extractableChapters.length;
+      log('Starting extraction', { chapterCount, isCollection });
 
       // Build full text
-      const fullText = currentProject.chapters.map((ch, i) => 
-        `## Section ${i + 1}: ${ch.title}\n${ch.content}`
+      const fullText = extractableChapters.map((ch, i) => 
+        `## ${isCollection ? 'Story' : 'Section'} ${i + 1}: ${ch.title}\n${ch.content}`
       ).join('\n\n');
       
       log('Full text prepared', { length: fullText.length });
@@ -678,7 +732,7 @@ function App() {
         log('Attempting single request');
         setLoadingMessage('Analysing manuscript...');
         
-        const result = await extractChunk(fullText, 1, chapterCount, chapterCount);
+        const result = await extractChunk(fullText, 1, chapterCount, chapterCount, isCollection, extractableChapters);
         log('Single request complete', { entities: result.entities?.length, hitMaxTokens: result.hitMaxTokens });
         
         if (result.hitMaxTokens) {
@@ -697,7 +751,7 @@ function App() {
         
         for (let i = 0; i < chapterCount; i += chunkSize) {
           chunks.push({
-            chapters: currentProject.chapters.slice(i, i + chunkSize),
+            chapters: extractableChapters.slice(i, i + chunkSize),
             startNum: i + 1
           });
         }
@@ -709,16 +763,16 @@ function App() {
           const { chapters, startNum } = chunks[chunkIndex];
           const endNum = startNum + chapters.length - 1;
           
-          setLoadingMessage(`Analysing sections ${startNum}-${endNum} of ${chapterCount}...`);
+          setLoadingMessage(`Analysing ${isCollection ? 'stories' : 'sections'} ${startNum}-${endNum} of ${chapterCount}...`);
           
           const chunkText = chapters.map((ch, i) => 
-            `## Section ${startNum + i}: ${ch.title}\n${ch.content}`
+            `## ${isCollection ? 'Story' : 'Section'} ${startNum + i}: ${ch.title}\n${ch.content}`
           ).join('\n\n');
           
           log(`Processing chunk ${chunkIndex + 1}`, { startNum, endNum, textLength: chunkText.length });
 
           try {
-            const result = await extractChunk(chunkText, startNum, endNum, chapterCount);
+            const result = await extractChunk(chunkText, startNum, endNum, chapterCount, isCollection, extractableChapters);
             log(`Chunk ${chunkIndex + 1} complete`, { entities: result.entities?.length });
             if (result.entities) {
               allNewEntities.push(...result.entities);
@@ -738,45 +792,69 @@ function App() {
         return;
       }
 
-      // Deduplicate entities by name+type
-      log('Starting deduplication');
-      const seen = new Set();
-      const deduped = [];
-      for (const entity of allNewEntities) {
-        const key = `${entity.type}:${entity.name.toLowerCase().trim()}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          deduped.push(entity);
-        } else {
-          const existing = deduped.find(e => `${e.type}:${e.name.toLowerCase().trim()}` === key);
-          if (existing && entity.chapterNums) {
-            existing.chapterNums = [...new Set([...(existing.chapterNums || []), ...entity.chapterNums])].sort((a,b) => a-b);
+      // Deduplicate entities by name+type (only for novels, not collections)
+      let processedEntities = allNewEntities;
+      if (!isCollection) {
+        log('Starting deduplication (novel mode)');
+        const seen = new Set();
+        const deduped = [];
+        for (const entity of allNewEntities) {
+          const key = `${entity.type}:${entity.name.toLowerCase().trim()}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            deduped.push(entity);
+          } else {
+            const existing = deduped.find(e => `${e.type}:${e.name.toLowerCase().trim()}` === key);
+            if (existing && entity.chapterNums) {
+              existing.chapterNums = [...new Set([...(existing.chapterNums || []), ...entity.chapterNums])].sort((a,b) => a-b);
+            }
           }
         }
+        log('Deduplication complete', { before: allNewEntities.length, after: deduped.length });
+        processedEntities = deduped;
+      } else {
+        log('Skipping deduplication (collection mode)');
       }
-      
-      log('Deduplication complete', { before: allNewEntities.length, after: deduped.length });
 
-      // Position entities
+      // Position entities in a grid, sorted by first chapter appearance
       log('Starting positioning');
-      const existingPositions = currentProject.entities.map(e => e.position || { x: 0, y: 0 });
-      const newPositions = [];
-      const finalEntities = [];
       
-      for (let i = 0; i < deduped.length; i++) {
-        const entity = deduped[i];
-        const position = findEmptyPosition([...existingPositions, ...newPositions]);
-        newPositions.push(position);
+      // Sort by type first, then by first chapter appearance
+      processedEntities.sort((a, b) => {
+        const typeOrder = ['scene', 'character', 'location', 'theme', 'idea'];
+        const typeA = typeOrder.indexOf(a.type);
+        const typeB = typeOrder.indexOf(b.type);
+        if (typeA !== typeB) return typeA - typeB;
         
-        finalEntities.push({
+        const firstChA = Math.min(...(a.chapterNums || [999]));
+        const firstChB = Math.min(...(b.chapterNums || [999]));
+        return firstChA - firstChB;
+      });
+      
+      const finalEntities = processedEntities.map((entity, i) => {
+        // Grid positioning: fit to reasonable viewport width
+        const cardWidth = 240;
+        const cardHeight = 180;
+        const cardsPerRow = 5;
+        const startX = 40;
+        const startY = 40;
+        
+        const col = i % cardsPerRow;
+        const row = Math.floor(i / cardsPerRow);
+        
+        return {
           ...entity,
           id: generateId('ent'),
           chapterRefs: (entity.chapterNums || [])
-            .map(num => currentProject.chapters[num - 1]?.id)
+            .map(num => extractableChapters[num - 1]?.id)
             .filter(Boolean),
-          position
-        });
-      }
+          // For collections, store story titles instead of chapter refs
+          storyRefs: isCollection ? (entity.chapterNums || [])
+            .map(num => extractableChapters[num - 1]?.title)
+            .filter(Boolean) : undefined,
+          position: { x: startX + col * cardWidth, y: startY + row * cardHeight }
+        };
+      });
       
       // Remove chapterNums from final entities
       finalEntities.forEach(e => delete e.chapterNums);
@@ -786,6 +864,7 @@ function App() {
       log('Updating project state');
       setCurrentProject(prev => ({
         ...prev,
+        bookType: isCollection ? 'collection' : 'novel',
         entities: [...prev.entities, ...finalEntities]
       }));
 
@@ -802,27 +881,39 @@ function App() {
 
   // Helper function to extract from a chunk of text
   // Returns { entities: [...], hitMaxTokens: boolean }
-  const extractChunk = async (text, startNum, endNum, totalSections) => {
+  const extractChunk = async (text, startNum, endNum, totalSections, isCollection = false, chapters = []) => {
     const sectionCount = endNum - startNum + 1;
-    const sectionRange = startNum === endNum ? `section ${startNum}` : `sections ${startNum}-${endNum}`;
+    const unitName = isCollection ? 'story' : 'section';
+    const unitNamePlural = isCollection ? 'stories' : 'sections';
+    const sectionRange = startNum === endNum ? `${unitName} ${startNum}` : `${unitNamePlural} ${startNum}-${endNum}`;
+    
+    // Build story titles list for collection mode
+    const storyTitles = isCollection ? chapters.slice(startNum - 1, endNum).map((ch, i) => 
+      `${startNum + i}: "${ch.title}"`
+    ).join(', ') : '';
     
     // IMPORTANT: Scenes first in the prompt since they're most likely to be cut off by token limits
-    const prompt = `Analyse this text and extract entities. This is ${sectionRange} of a ${totalSections}-section work.
+    const collectionNote = isCollection ? `
+IMPORTANT: This is a SHORT STORY COLLECTION. Each story is INDEPENDENT. Characters with the same name in different stories are DIFFERENT PEOPLE. Do NOT merge or deduplicate characters across stories.
+Story titles: ${storyTitles}
+` : '';
 
+    const prompt = `Analyse this text and extract entities. This is ${sectionRange} of a ${totalSections}-${unitName} work.
+${collectionNote}
 TEXT:
 ${text}
 
 Extract (in this order - SCENES FIRST as they are most important):
 
-1. SCENES: Extract AT LEAST ONE significant scene per section. You have ${sectionCount} sections (${startNum}-${endNum}), so provide at least ${sectionCount} scenes. Each scene should capture the key action, conflict, or development in that section.
+1. SCENES: Extract AT LEAST ONE significant scene per ${unitName}. You have ${sectionCount} ${unitNamePlural} (${startNum}-${endNum}), so provide at least ${sectionCount} scenes. Each scene should capture the key action, conflict, or development in that ${unitName}.
 
-2. CHARACTERS: People mentioned by name. Include their role/description and which section numbers they appear in.
+2. CHARACTERS: People mentioned by name. Include their role/description and which ${unitName} numbers they appear in.${isCollection ? ' Remember: same name in different stories = different characters.' : ''}
 
 3. LOCATIONS: Named places or settings.
 
 4. THEMES: Major themes or motifs (typically 2-4 for this excerpt).
 
-Use section numbers ${startNum}-${endNum} for the chapterNums field.
+Use ${unitName} numbers ${startNum}-${endNum} for the chapterNums field.
 
 Respond ONLY with valid JSON (no markdown fences, no explanation):
 {
@@ -1022,6 +1113,7 @@ Respond ONLY with valid JSON (no markdown fences, no explanation):
             }}
             onAddFolder={() => setShowAddFolderModal(true)}
             onDeleteCustomFolder={deleteCustomFolder}
+            onMergeEntities={(selected) => mergeEntities(selected[0], selected[1])}
           />
         )}
       </div>
@@ -1195,22 +1287,51 @@ function Corkboard({
   onImport,
   onAddEntity,
   onAddFolder,
-  onDeleteCustomFolder
+  onDeleteCustomFolder,
+  onMergeEntities
 }) {
   const [activeFolder, setActiveFolder] = useState(null);
   const [isCustomFolder, setIsCustomFolder] = useState(false);
+  const [selectedForMerge, setSelectedForMerge] = useState([]);
+  const [showMergeModal, setShowMergeModal] = useState(false);
   
-  // ESC key to go back
+  // ESC key to go back or clear selection
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (e.key === 'Escape' && activeFolder) {
-        setActiveFolder(null);
-        setIsCustomFolder(false);
+      if (e.key === 'Escape') {
+        if (selectedForMerge.length > 0) {
+          setSelectedForMerge([]);
+        } else if (activeFolder) {
+          setActiveFolder(null);
+          setIsCustomFolder(false);
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeFolder, selectedForMerge]);
+  
+  // Clear selection when changing folders
+  useEffect(() => {
+    setSelectedForMerge([]);
   }, [activeFolder]);
+  
+  // Toggle entity selection for merge
+  const toggleMergeSelection = (entity) => {
+    setSelectedForMerge(prev => {
+      if (prev.find(e => e.id === entity.id)) {
+        return prev.filter(e => e.id !== entity.id);
+      }
+      // Only allow selecting same type
+      if (prev.length > 0 && prev[0].type !== entity.type) {
+        return prev; // Ignore if different type
+      }
+      if (prev.length >= 2) {
+        return prev; // Max 2 for merge
+      }
+      return [...prev, entity];
+    });
+  };
   
   // Entity types for folders
   const entityTypes = [
@@ -1310,7 +1431,22 @@ function Corkboard({
               <span className="folder-count">{folderEntities.length} cards</span>
             </>
           )}
-          <span className="esc-hint">ESC to go back</span>
+          {folderEntities.length >= 2 && (
+            <button 
+              className={`btn btn-merge ${selectedForMerge.length === 2 ? 'ready' : ''}`}
+              onClick={() => {
+                if (selectedForMerge.length === 2) {
+                  onMergeEntities(selectedForMerge);
+                  setSelectedForMerge([]);
+                }
+              }}
+              disabled={selectedForMerge.length !== 2}
+              title={selectedForMerge.length === 2 ? "Merge selected cards" : "Shift+click 2 cards to merge"}
+            >
+              {selectedForMerge.length === 2 ? '🔗 Merge' : '🔗'}
+            </button>
+          )}
+          <span className="esc-hint">{selectedForMerge.length > 0 ? 'ESC to clear selection' : 'ESC to go back'}</span>
         </div>
         <div className="folder-contents">
           <div className="corkboard-inner">
@@ -1322,6 +1458,8 @@ function Corkboard({
                 onUpdatePosition={onUpdatePosition}
                 onEdit={() => onEditEntity(entity)}
                 onDelete={() => onDeleteEntity(entity.id)}
+                isSelected={selectedForMerge.some(e => e.id === entity.id)}
+                onShiftClick={() => toggleMergeSelection(entity)}
               />
             ))}
           </div>
@@ -1428,13 +1566,21 @@ function ChapterEditor({ chapter, chapterIndex, onUpdateContent, onUpdateTitle, 
 }
 
 // Entity Card Component (Draggable)
-function EntityCard({ entity, chapters, onUpdatePosition, onEdit, onDelete }) {
+function EntityCard({ entity, chapters, onUpdatePosition, onEdit, onDelete, isSelected, onShiftClick }) {
   const cardRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
 
   const handleMouseDown = (e) => {
     if (e.target.classList.contains('entity-delete')) return;
+    
+    // Shift+click for merge selection
+    if (e.shiftKey && onShiftClick) {
+      e.preventDefault();
+      onShiftClick();
+      return;
+    }
+    
     setIsDragging(true);
     const rect = cardRef.current.getBoundingClientRect();
     setOffset({
@@ -1477,10 +1623,17 @@ function EntityCard({ entity, chapters, onUpdatePosition, onEdit, onDelete }) {
     })
     .filter(Boolean);
 
+  // For collections, show story titles instead of chapter numbers
+  const displayRefs = entity.storyRefs && entity.storyRefs.length > 0
+    ? entity.storyRefs.join(', ')
+    : chapterNames.length > 0 
+      ? `Ch. ${chapterNames.join(', ')}`
+      : null;
+
   return (
     <div
       ref={cardRef}
-      className={`entity-card ${entity.type}`}
+      className={`entity-card ${entity.type} ${isSelected ? 'selected-for-merge' : ''}`}
       style={{
         left: entity.position?.x || 0,
         top: entity.position?.y || 0,
@@ -1490,14 +1643,15 @@ function EntityCard({ entity, chapters, onUpdatePosition, onEdit, onDelete }) {
       onDoubleClick={onEdit}
     >
       <button className="entity-delete" onClick={onDelete} title="Delete card">×</button>
+      {isSelected && <div className="merge-indicator">🔗</div>}
       <div className="entity-type">{entity.type}</div>
       <div className="entity-name">{entity.name}</div>
       {entity.description && (
         <div className="entity-description">{entity.description}</div>
       )}
-      {chapterNames.length > 0 && (
+      {displayRefs && (
         <div className="entity-chapters">
-          Ch. {chapterNames.join(', ')}
+          {displayRefs}
         </div>
       )}
     </div>
@@ -1786,6 +1940,8 @@ function SettingsModal({ geminiKey, onGeminiKeyChange, debugMode, onDebugModeCha
 
 // Extract Modal Component (Gemini API)
 function ExtractModal({ geminiKey, onGeminiKeyChange, onExtract, onClose }) {
+  const [bookType, setBookType] = useState('novel');
+  
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
@@ -1793,6 +1949,19 @@ function ExtractModal({ geminiKey, onGeminiKeyChange, onExtract, onClose }) {
         <p style={{ marginBottom: '20px', color: 'var(--ink-light)' }}>
           Use Gemini AI to automatically extract characters, themes, locations, and key scenes from your manuscript.
         </p>
+        
+        <div className="book-type-section">
+          <label>Book Type</label>
+          <select value={bookType} onChange={(e) => setBookType(e.target.value)}>
+            <option value="novel">Novel (single continuous story)</option>
+            <option value="collection">Short Story Collection</option>
+          </select>
+          <p className="help-text" style={{ marginTop: '8px' }}>
+            {bookType === 'novel' 
+              ? 'Characters appearing in multiple chapters will be merged into one card.'
+              : 'Each story is treated independently. Characters with the same name in different stories remain separate.'}
+          </p>
+        </div>
         
         {geminiKey ? (
           <div className="api-key-section">
@@ -1823,7 +1992,7 @@ function ExtractModal({ geminiKey, onGeminiKeyChange, onExtract, onClose }) {
           <button className="btn" onClick={onClose}>Cancel</button>
           <button 
             className="btn btn-primary" 
-            onClick={onExtract}
+            onClick={() => onExtract(bookType === 'collection')}
             disabled={!geminiKey}
           >
             Extract
@@ -1887,6 +2056,22 @@ function EntityModal({ entity, chapters, customFolders = [], defaultType, onSave
             <option value="idea">Idea / Note</option>
           </select>
 
+          {customFolders.length > 0 && (
+            <>
+              <label>Custom Folder</label>
+              <select
+                value={form.folder || ''}
+                onChange={(e) => setForm({ ...form, folder: e.target.value || null })}
+              >
+                <option value="">None</option>
+                {customFolders.map(folder => (
+                  <option key={folder} value={folder}>{folder}</option>
+                ))}
+              </select>
+              <p className="help-text">Optionally group this card in a custom folder</p>
+            </>
+          )}
+
           <label>Name</label>
           <input
             type="text"
@@ -1902,21 +2087,6 @@ function EntityModal({ entity, chapters, customFolders = [], defaultType, onSave
             onChange={(e) => setForm({ ...form, description: e.target.value })}
             placeholder="Notes, details, observations..."
           />
-
-          {customFolders.length > 0 && (
-            <>
-              <label>Custom Folder</label>
-              <select
-                value={form.folder || ''}
-                onChange={(e) => setForm({ ...form, folder: e.target.value || null })}
-              >
-                <option value="">None</option>
-                {customFolders.map(folder => (
-                  <option key={folder} value={folder}>{folder}</option>
-                ))}
-              </select>
-            </>
-          )}
 
           {chapters.length > 0 && (
             <>
@@ -1941,6 +2111,62 @@ function EntityModal({ entity, chapters, customFolders = [], defaultType, onSave
             <button type="submit" className="btn btn-primary">Save</button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+// Merge Modal Component
+function MergeModal({ entities, onMerge, onClose }) {
+  const [keepId, setKeepId] = useState(entities[0]?.id || '');
+  
+  if (entities.length < 2) {
+    return (
+      <div className="modal-overlay" onClick={onClose}>
+        <div className="modal" onClick={e => e.stopPropagation()}>
+          <h2>Merge Cards</h2>
+          <p>Select at least 2 cards of the same type to merge.</p>
+          <div className="modal-actions">
+            <button className="btn btn-primary" onClick={onClose}>OK</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  
+  const keepEntity = entities.find(e => e.id === keepId);
+  const mergeEntity = entities.find(e => e.id !== keepId);
+  
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <h2>Merge Cards</h2>
+        <p style={{ marginBottom: '16px', color: 'var(--ink-light)' }}>
+          Combine two cards into one. The merged card will have combined descriptions and chapter references.
+        </p>
+        
+        <label>Keep this card (primary):</label>
+        <select value={keepId} onChange={(e) => setKeepId(e.target.value)}>
+          {entities.map(e => (
+            <option key={e.id} value={e.id}>{e.name}</option>
+          ))}
+        </select>
+        
+        <div className="merge-preview">
+          <p><strong>Result:</strong></p>
+          <p><strong>Name:</strong> {keepEntity?.name}</p>
+          <p><strong>Description:</strong> {[keepEntity?.description, mergeEntity?.description].filter(Boolean).join(' | ') || '(none)'}</p>
+        </div>
+
+        <div className="modal-actions">
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button 
+            className="btn btn-primary" 
+            onClick={() => onMerge(keepEntity, mergeEntity)}
+          >
+            Merge
+          </button>
+        </div>
       </div>
     </div>
   );

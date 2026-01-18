@@ -6,8 +6,11 @@ A visual planning tool for novelists. Organise your characters, themes, location
 
 - **Folder-Based Organisation**: Cards are organised into folders by type (Characters, Scenes, Locations, Themes, Ideas). Click a folder to view and arrange its cards.
 - **Custom Folders**: Create your own folders (e.g., "Antagonists", "Act 1", "Red Herrings") to group cards across types.
+- **Novel & Collection Support**: Works with both novels (continuous story) and short story collections (independent stories).
 - **Chapter Timeline**: Import your manuscript and see chapters in order. Drag to reorder. Click to edit.
+- **Front Matter Preservation**: Epigraphs, dedications, and other content before the first chapter are captured and editable.
 - **AI Extraction**: Use Gemini to automatically extract characters, themes, locations, and key scenes from your manuscript.
+- **Merge Cards**: Combine duplicate or related cards with shift+click selection.
 - **Import/Export**: 
   - Import Markdown manuscripts or JSON project files
   - Export your manuscript (full text in chapter order)
@@ -33,8 +36,29 @@ A visual planning tool for novelists. Organise your characters, themes, location
 - **Top-level view**: Shows all folders (5 built-in types + any custom folders you've created)
 - **Inside a folder**: Shows all cards of that type, freely draggable
 - **+ button**: At top level, creates a custom folder. Inside a folder, adds a card of that type.
-- **ESC key**: Returns to top-level folder view
+- **ESC key**: Returns to top-level folder view (or clears merge selection)
 - **Double-click a card**: Edit its details
+- **Shift+click cards**: Select cards for merging (same type only)
+
+### Novel vs Short Story Collection
+
+When extracting entities, you'll be asked whether your manuscript is:
+
+- **Novel** (default): A single continuous story. Characters appearing in multiple chapters are merged into one card. Cards show chapter numbers (e.g., "Ch. 1, 3, 7").
+
+- **Short Story Collection**: Independent stories. Characters with the same name in different stories remain separate (no deduplication). Cards show story titles instead of chapter numbers.
+
+### Merging Cards
+
+If you have duplicate cards or want to combine related entries:
+
+1. Open any folder containing 2+ cards
+2. **Shift+click** two cards of the same type to select them (blue highlight appears)
+3. Click the **🔗 Merge** button in the header (turns blue when ready)
+4. The merged card combines descriptions and chapter/story references
+5. Press **ESC** to cancel and clear selection
+
+This is particularly useful for short story collections where the same character name might appear in multiple stories but you later realise they should be combined.
 
 ### Custom Folders
 
@@ -47,7 +71,7 @@ Custom folders let you group cards across types. For example:
 
 Cards can belong to both their type folder (e.g., Characters) AND a custom folder (e.g., Antagonists). They appear in both places but remain a single entity.
 
-To assign a card to a custom folder, edit the card and select from the "Custom Folder" dropdown.
+To assign a card to a custom folder, edit the card and select from the "Custom Folder" dropdown (directly below the Type selector).
 
 ### Hosting on GitHub Pages
 
@@ -59,8 +83,14 @@ To assign a card to a custom folder, edit the card and select from the "Custom F
 
 The importer treats `#` as the book title and `##` as chapter headers. Everything between chapter headers becomes chapter content.
 
+**Front matter** (epigraphs, dedications, etc.) appearing after the title but before the first chapter is preserved as a special "Front Matter" section.
+
 ```markdown
 # My Novel Title
+
+_For everyone who believed in me._
+
+> "The only way out is through." — Robert Frost
 
 ## Chapter One: The Beginning
 
@@ -76,13 +106,21 @@ If your document only uses `#` headers (no `##`), they'll be treated as chapters
 
 ### JSON Format
 
-For full round-trip fidelity, use JSON. This preserves card positions, custom folders, and all metadata.
+For full round-trip fidelity, use JSON. This preserves card positions, custom folders, book type, and all metadata.
 
 ```json
 {
   "title": "My Novel",
+  "bookType": "novel",
   "customFolders": ["Antagonists", "Act 1"],
   "chapters": [
+    {
+      "id": "ch-0",
+      "title": "Front Matter",
+      "content": "For everyone who believed in me.",
+      "order": 0,
+      "isFrontMatter": true
+    },
     {
       "id": "ch-1",
       "title": "Chapter One: The Beginning",
@@ -98,16 +136,16 @@ For full round-trip fidelity, use JSON. This preserves card positions, custom fo
       "description": "World-weary private eye. Ex-cop. Drinks too much.",
       "chapterRefs": ["ch-1", "ch-2"],
       "folder": "Antagonists",
-      "position": { "x": 150, "y": 100 }
+      "position": { "x": 40, "y": 40 }
     },
     {
       "id": "ent-2",
-      "type": "theme",
-      "name": "Institutional Corruption",
-      "description": "The rot runs deeper than any individual.",
-      "chapterRefs": [],
+      "type": "character",
+      "name": "Sarah",
+      "description": "Lighthouse keeper's daughter in 'The Light'",
+      "storyRefs": ["The Light at Midnight"],
       "folder": null,
-      "position": { "x": 400, "y": 100 }
+      "position": { "x": 280, "y": 40 }
     }
   ]
 }
@@ -126,7 +164,8 @@ For full round-trip fidelity, use JSON. This preserves card positions, custom fo
 - `type` — One of the five types above (required)
 - `name` — Display name (required)
 - `description` — Notes, details, observations (optional)
-- `chapterRefs` — Array of chapter IDs where this entity appears (optional)
+- `chapterRefs` — Array of chapter IDs where this entity appears (optional, for novels)
+- `storyRefs` — Array of story titles where this entity appears (optional, for collections)
 - `folder` — Name of a custom folder, or null (optional)
 - `position` — `{x, y}` coordinates on the corkboard (optional, auto-assigned if missing)
 
@@ -140,17 +179,15 @@ Click the **Extract** button in the toolbar to use Gemini AI to automatically id
 
 You'll need a Gemini API key, which you can get free at [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Your key is stored only in your browser's localStorage and is sent directly to Google's API—it never touches any other server.
 
-Extracted entities are added to your existing cards. You can then edit, rearrange, assign to custom folders, or delete them as needed.
-
 #### Extraction Options
 
 When you have existing cards, clicking Extract gives you two options:
 - **Clear All & Re-extract**: Removes existing cards and starts fresh
-- **Add to Existing**: Keeps your cards and adds newly extracted ones (duplicates are merged)
+- **Add to Existing**: Keeps your cards and adds newly extracted ones
 
 ### Exports
 
-- **Project (JSON)**: Complete backup including positions, custom folders, everything. Use for backup/restore.
+- **Project (JSON)**: Complete backup including positions, custom folders, book type, everything. Use for backup/restore.
 - **Manuscript (Markdown)**: Just the chapter text in order. Use for editing in other tools.
 - **Bible (Markdown)**: Structured document with chapter outline, all entities by type, and custom folder contents. Use as a reference while writing.
 
@@ -181,7 +218,24 @@ If you clear your browser data, your projects will be lost—export regularly!
 
 ## Version
 
-Current version: 2.0
+Current version: 2.1
+
+## Changelog
+
+### 2.1
+- Novel vs Collection mode for extraction (collections skip deduplication, show story titles)
+- Front matter preservation (epigraphs, dedications before first chapter)
+- Merge cards feature (shift+click to select, combine duplicates)
+- Grid-based card positioning (no more off-screen scatter)
+- Custom folder dropdown moved under Type for clarity
+
+### 2.0
+- Folder-based navigation (cards organised by type)
+- Custom folders for cross-type grouping
+- ESC key navigation
+
+### 1.x
+- Initial release with corkboard, AI extraction, import/export
 
 ## License
 

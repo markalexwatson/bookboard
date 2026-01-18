@@ -956,3 +956,76 @@ body {
   opacity: 0.6;
   margin-left: 16px;
 }
+
+/* Merge functionality */
+.btn-merge {
+  background: var(--cork-dark);
+  padding: 4px 12px;
+  margin-left: auto;
+  opacity: 0.6;
+}
+
+.btn-merge.ready {
+  background: var(--blue-pin);
+  opacity: 1;
+}
+
+.btn-merge:disabled {
+  cursor: default;
+}
+
+.entity-card.selected-for-merge {
+  box-shadow: 0 0 0 3px var(--blue-pin), 6px 8px 20px rgba(0,0,0,0.3);
+  z-index: 10;
+}
+
+.merge-indicator {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  background: var(--blue-pin);
+  color: white;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+
+.merge-preview {
+  background: rgba(0,0,0,0.05);
+  padding: 12px;
+  margin: 12px 0;
+  font-size: 0.85rem;
+}
+
+.merge-preview p {
+  margin: 4px 0;
+}
+
+/* Book type section in extract modal */
+.book-type-section {
+  margin-bottom: 20px;
+}
+
+.book-type-section select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--paper-shadow);
+  font-family: inherit;
+  font-size: 0.9rem;
+  background: white;
+}
+
+/* Front matter styling in timeline */
+.chapter-card.front-matter {
+  background: var(--idea);
+  border-left: 3px solid var(--purple-pin);
+}
+
+.chapter-card.front-matter::before {
+  background: radial-gradient(circle at 30% 30%, var(--purple-pin), #5a3a50);
+}
