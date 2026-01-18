@@ -612,22 +612,29 @@ function App() {
 
       // Decide whether to chunk based on size
       const CHUNK_THRESHOLD = 200000;
-      const needsChunking = fullText.length > CHUNK_THRESHOLD;
+      let needsChunking = fullText.length > CHUNK_THRESHOLD;
       
       let allNewEntities = [];
 
       if (!needsChunking) {
-        // Single request for smaller documents
-        log('Processing as single request');
+        // Try single request for smaller documents
+        log('Attempting single request');
         setLoadingMessage('Analysing manuscript...');
         
-        const entities = await extractChunk(fullText, 1, chapterCount, chapterCount);
-        log('Single request complete', { entities: entities?.length });
-        if (entities) {
-          allNewEntities = entities;
+        const result = await extractChunk(fullText, 1, chapterCount, chapterCount);
+        log('Single request complete', { entities: result.entities?.length, hitMaxTokens: result.hitMaxTokens });
+        
+        if (result.hitMaxTokens) {
+          // Retry with chunking
+          log('MAX_TOKENS hit, falling back to chunked extraction');
+          needsChunking = true;
+        } else if (result.entities) {
+          allNewEntities = result.entities;
         }
-      } else {
-        // Chunk for larger documents
+      }
+      
+      if (needsChunking) {
+        // Chunk for larger documents or when single request hit token limit
         const chunkSize = 3;
         const chunks = [];
         
@@ -639,6 +646,7 @@ function App() {
         }
         
         log('Processing in chunks', { totalChunks: chunks.length, chunkSize });
+        allNewEntities = []; // Reset in case we had partial results from failed single request
 
         for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
           const { chapters, startNum } = chunks[chunkIndex];
@@ -653,10 +661,10 @@ function App() {
           log(`Processing chunk ${chunkIndex + 1}`, { startNum, endNum, textLength: chunkText.length });
 
           try {
-            const entities = await extractChunk(chunkText, startNum, endNum, chapterCount);
-            log(`Chunk ${chunkIndex + 1} complete`, { entities: entities?.length });
-            if (entities) {
-              allNewEntities.push(...entities);
+            const result = await extractChunk(chunkText, startNum, endNum, chapterCount);
+            log(`Chunk ${chunkIndex + 1} complete`, { entities: result.entities?.length });
+            if (result.entities) {
+              allNewEntities.push(...result.entities);
             }
           } catch (error) {
             log('Chunk failed, continuing', { chunkIndex, error: error.message });
@@ -736,30 +744,36 @@ function App() {
   };
 
   // Helper function to extract from a chunk of text
+  // Returns { entities: [...], hitMaxTokens: boolean }
   const extractChunk = async (text, startNum, endNum, totalSections) => {
     const sectionCount = endNum - startNum + 1;
     const sectionRange = startNum === endNum ? `section ${startNum}` : `sections ${startNum}-${endNum}`;
     
+    // IMPORTANT: Scenes first in the prompt since they're most likely to be cut off by token limits
     const prompt = `Analyse this text and extract entities. This is ${sectionRange} of a ${totalSections}-section work.
 
 TEXT:
 ${text}
 
-Extract:
-1. CHARACTERS: People mentioned by name. Include their role/description and which section numbers they appear in (${startNum}-${endNum}).
-2. THEMES: Major themes or motifs (typically 2-4 for this excerpt).
-3. LOCATIONS: Named places or settings.
-4. SCENES: Extract AT LEAST ONE significant scene per section. You have ${sectionCount} sections, so provide at least ${sectionCount} scenes. Each scene should capture the key action or development.
+Extract (in this order - SCENES FIRST as they are most important):
 
-Use section numbers ${startNum}-${endNum} for chapterNums field.
+1. SCENES: Extract AT LEAST ONE significant scene per section. You have ${sectionCount} sections (${startNum}-${endNum}), so provide at least ${sectionCount} scenes. Each scene should capture the key action, conflict, or development in that section.
+
+2. CHARACTERS: People mentioned by name. Include their role/description and which section numbers they appear in.
+
+3. LOCATIONS: Named places or settings.
+
+4. THEMES: Major themes or motifs (typically 2-4 for this excerpt).
+
+Use section numbers ${startNum}-${endNum} for the chapterNums field.
 
 Respond ONLY with valid JSON (no markdown fences, no explanation):
 {
   "entities": [
+    {"type": "scene", "name": "Scene Title", "description": "What happens", "chapterNums": [${startNum}]},
     {"type": "character", "name": "Name", "description": "Brief description", "chapterNums": [${startNum}]},
-    {"type": "theme", "name": "Theme Name", "description": "How it manifests", "chapterNums": [${startNum}]},
     {"type": "location", "name": "Place", "description": "Description", "chapterNums": [${startNum}]},
-    {"type": "scene", "name": "Scene Title", "description": "What happens", "chapterNums": [${startNum}]}
+    {"type": "theme", "name": "Theme Name", "description": "How it manifests", "chapterNums": [${startNum}]}
   ]
 }`;
 
@@ -772,7 +786,7 @@ Respond ONLY with valid JSON (no markdown fences, no explanation):
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
           temperature: 0.3,
-          maxOutputTokens: 16384,
+          maxOutputTokens: 65536, // Maximum allowed for Gemini 2.5 Flash
         }
       })
     });
@@ -785,10 +799,13 @@ Respond ONLY with valid JSON (no markdown fences, no explanation):
 
     const data = await response.json();
     const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    const finishReason = data.candidates?.[0]?.finishReason;
+    const hitMaxTokens = finishReason === 'MAX_TOKENS';
     
     log('API response received', { 
       contentLength: content?.length,
-      finishReason: data.candidates?.[0]?.finishReason 
+      finishReason,
+      hitMaxTokens
     });
     
     if (!content) {
@@ -821,7 +838,7 @@ Respond ONLY with valid JSON (no markdown fences, no explanation):
       }
     }
     
-    return parsed.entities || [];
+    return { entities: parsed.entities || [], hitMaxTokens };
   };
 
   // Render library or editor view
