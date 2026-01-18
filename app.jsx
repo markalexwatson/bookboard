@@ -3,6 +3,9 @@ const { useState, useEffect, useRef, useCallback } = React;
 // Utility: Generate unique IDs
 const generateId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
+// App version
+const APP_VERSION = '2.0';
+
 // Storage keys
 const STORAGE_KEYS = {
   projectIndex: 'bookboard-index',
@@ -44,6 +47,7 @@ const createEmptyProject = () => ({
   title: "Untitled Novel",
   chapters: [],
   entities: [],
+  customFolders: [], // User-defined folders (array of strings)
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString()
 });
@@ -110,9 +114,11 @@ function App() {
   const [showExtractConfirmModal, setShowExtractConfirmModal] = useState(false);
   const [showImportConflictModal, setShowImportConflictModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showAddFolderModal, setShowAddFolderModal] = useState(false);
   const [pendingImport, setPendingImport] = useState(null);
   const [editingEntity, setEditingEntity] = useState(null);
   const [editingChapterId, setEditingChapterId] = useState(null);
+  const [defaultEntityType, setDefaultEntityType] = useState(null); // For add button in folders
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
   const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem(STORAGE_KEYS.geminiKey) || '');
@@ -142,6 +148,10 @@ function App() {
   const openProject = (projectId) => {
     const project = loadProject(projectId);
     if (project) {
+      // Ensure customFolders exists for older projects
+      if (!project.customFolders) {
+        project.customFolders = [];
+      }
       setCurrentProject(project);
       setView('editor');
       localStorage.setItem(STORAGE_KEYS.lastOpenedProject, projectId);
@@ -176,6 +186,27 @@ function App() {
   // Update project title
   const updateTitle = (title) => {
     setCurrentProject(prev => ({ ...prev, title }));
+  };
+
+  // Add custom folder
+  const addCustomFolder = (folderName) => {
+    if (!folderName.trim()) return;
+    setCurrentProject(prev => ({
+      ...prev,
+      customFolders: [...(prev.customFolders || []), folderName.trim()]
+    }));
+    setShowAddFolderModal(false);
+  };
+
+  // Delete custom folder
+  const deleteCustomFolder = (folderName) => {
+    if (confirm(`Delete folder "${folderName}"? Cards in this folder will be unassigned but not deleted.`)) {
+      setCurrentProject(prev => ({
+        ...prev,
+        customFolders: (prev.customFolders || []).filter(f => f !== folderName),
+        entities: prev.entities.map(e => e.folder === folderName ? { ...e, folder: null } : e)
+      }));
+    }
   };
 
   // Update entity position
@@ -218,6 +249,7 @@ function App() {
     });
     setShowEntityModal(false);
     setEditingEntity(null);
+    setDefaultEntityType(null);
   };
 
   // Reorder chapters
@@ -508,6 +540,10 @@ function App() {
           if (entity.description) {
             md += `${entity.description}\n\n`;
           }
+          const metadata = [];
+          if (entity.folder) {
+            metadata.push(`Folder: ${entity.folder}`);
+          }
           if (entity.chapterRefs?.length > 0) {
             const chapterNames = entity.chapterRefs
               .map(id => {
@@ -516,12 +552,33 @@ function App() {
               })
               .filter(Boolean);
             if (chapterNames.length > 0) {
-              md += `*Appears in: ${chapterNames.join(', ')}*\n\n`;
+              metadata.push(`Appears in: ${chapterNames.join(', ')}`);
             }
+          }
+          if (metadata.length > 0) {
+            md += `*${metadata.join(' | ')}*\n\n`;
           }
         });
       }
     });
+
+    // Custom folders section
+    const customFolders = currentProject.customFolders || [];
+    if (customFolders.length > 0) {
+      md += `## Custom Folders\n\n`;
+      customFolders.forEach(folder => {
+        const folderEntities = currentProject.entities.filter(e => e.folder === folder);
+        md += `### ${folder}\n\n`;
+        if (folderEntities.length === 0) {
+          md += `*Empty*\n\n`;
+        } else {
+          folderEntities.forEach(entity => {
+            md += `- **${entity.name}** (${entity.type})${entity.description ? `: ${entity.description.substring(0, 100)}${entity.description.length > 100 ? '...' : ''}` : ''}\n`;
+          });
+          md += `\n`;
+        }
+      });
+    }
 
     const blob = new Blob([md.trim()], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
@@ -952,22 +1009,22 @@ Respond ONLY with valid JSON (no markdown fences, no explanation):
           <Corkboard 
             entities={currentProject.entities}
             chapters={currentProject.chapters}
+            customFolders={currentProject.customFolders || []}
             onUpdatePosition={updateEntityPosition}
             onEditEntity={(entity) => { setEditingEntity(entity); setShowEntityModal(true); }}
             onDeleteEntity={deleteEntity}
             isEmpty={currentProject.chapters.length === 0 && currentProject.entities.length === 0}
             onImport={() => setShowImportModal(true)}
+            onAddEntity={(type, folder) => { 
+              setDefaultEntityType(type); 
+              setEditingEntity(folder ? { folder } : null); 
+              setShowEntityModal(true); 
+            }}
+            onAddFolder={() => setShowAddFolderModal(true)}
+            onDeleteCustomFolder={deleteCustomFolder}
           />
         )}
       </div>
-
-      <button 
-        className="add-entity-btn" 
-        onClick={() => { setEditingEntity(null); setShowEntityModal(true); }}
-        title="Add new card"
-      >
-        +
-      </button>
 
       {showImportModal && (
         <ImportModal
@@ -1018,8 +1075,18 @@ Respond ONLY with valid JSON (no markdown fences, no explanation):
         <EntityModal
           entity={editingEntity}
           chapters={currentProject.chapters}
+          customFolders={currentProject.customFolders || []}
+          defaultType={defaultEntityType}
           onSave={saveEntity}
-          onClose={() => { setShowEntityModal(false); setEditingEntity(null); }}
+          onClose={() => { setShowEntityModal(false); setEditingEntity(null); setDefaultEntityType(null); }}
+        />
+      )}
+
+      {showAddFolderModal && (
+        <AddFolderModal
+          existingFolders={currentProject.customFolders || []}
+          onAdd={addCustomFolder}
+          onClose={() => setShowAddFolderModal(false)}
         />
       )}
 
@@ -1116,11 +1183,94 @@ function TimelinePanel({ chapters, onReorder, onChapterClick, editingChapterId }
   );
 }
 
-// Corkboard Component
-function Corkboard({ entities, chapters, onUpdatePosition, onEditEntity, onDeleteEntity, isEmpty, onImport }) {
-  return (
-    <div className="corkboard">
-      {isEmpty ? (
+// Corkboard Component with Folder Navigation
+function Corkboard({ 
+  entities, 
+  chapters, 
+  customFolders = [],
+  onUpdatePosition, 
+  onEditEntity, 
+  onDeleteEntity, 
+  isEmpty, 
+  onImport,
+  onAddEntity,
+  onAddFolder,
+  onDeleteCustomFolder
+}) {
+  const [activeFolder, setActiveFolder] = useState(null);
+  const [isCustomFolder, setIsCustomFolder] = useState(false);
+  
+  // ESC key to go back
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && activeFolder) {
+        setActiveFolder(null);
+        setIsCustomFolder(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeFolder]);
+  
+  // Entity types for folders
+  const entityTypes = [
+    { type: 'scene', label: 'Scenes', icon: '🎬' },
+    { type: 'character', label: 'Characters', icon: '👤' },
+    { type: 'location', label: 'Locations', icon: '📍' },
+    { type: 'theme', label: 'Themes', icon: '💡' },
+    { type: 'idea', label: 'Ideas', icon: '📝' }
+  ];
+  
+  // Count entities per type
+  const getCounts = () => {
+    const counts = {};
+    entityTypes.forEach(et => {
+      counts[et.type] = entities.filter(e => e.type === et.type).length;
+    });
+    return counts;
+  };
+  
+  // Count entities per custom folder
+  const getCustomFolderCounts = () => {
+    const counts = {};
+    (customFolders || []).forEach(folder => {
+      counts[folder] = entities.filter(e => e.folder === folder).length;
+    });
+    return counts;
+  };
+  
+  const counts = getCounts();
+  const customCounts = getCustomFolderCounts();
+  
+  // Get entities for current view
+  const getFolderEntities = () => {
+    if (!activeFolder) return [];
+    if (isCustomFolder) {
+      return entities.filter(e => e.folder === activeFolder);
+    }
+    return entities.filter(e => e.type === activeFolder);
+  };
+  
+  const folderEntities = getFolderEntities();
+  const activeFolderInfo = entityTypes.find(et => et.type === activeFolder);
+  
+  // Handle add button click
+  const handleAddClick = () => {
+    if (activeFolder && !isCustomFolder) {
+      // Inside a type folder - add entity with that type
+      onAddEntity(activeFolder);
+    } else if (activeFolder && isCustomFolder) {
+      // Inside a custom folder - add entity and assign to this folder
+      onAddEntity(null, activeFolder);
+    } else {
+      // At top level - add a new custom folder
+      onAddFolder();
+    }
+  };
+  
+  if (isEmpty && (!customFolders || customFolders.length === 0)) {
+    return (
+      <div className="corkboard">
         <div className="empty-state">
           <h2>Your corkboard is empty</h2>
           <p>
@@ -1129,20 +1279,91 @@ function Corkboard({ entities, chapters, onUpdatePosition, onEditEntity, onDelet
           </p>
           <button className="btn btn-primary" onClick={onImport}>Import</button>
         </div>
-      ) : (
-        <div className="corkboard-inner">
-          {entities.map(entity => (
-            <EntityCard
-              key={entity.id}
-              entity={entity}
-              chapters={chapters}
-              onUpdatePosition={onUpdatePosition}
-              onEdit={() => onEditEntity(entity)}
-              onDelete={() => onDeleteEntity(entity.id)}
-            />
-          ))}
+        <button className="add-entity-btn" onClick={handleAddClick} title="Add folder">+</button>
+      </div>
+    );
+  }
+  
+  // Folder view - showing cards of one type or custom folder
+  if (activeFolder) {
+    return (
+      <div className="corkboard">
+        <div className="folder-view-header">
+          <button className="btn" onClick={() => { setActiveFolder(null); setIsCustomFolder(false); }}>← Back</button>
+          {isCustomFolder ? (
+            <>
+              <span className="folder-icon custom">📁</span>
+              <h3>{activeFolder}</h3>
+              <span className="folder-count">{folderEntities.length} cards</span>
+              <button 
+                className="btn btn-delete-folder" 
+                onClick={() => { onDeleteCustomFolder(activeFolder); setActiveFolder(null); setIsCustomFolder(false); }}
+                title="Delete folder"
+              >
+                🗑️
+              </button>
+            </>
+          ) : (
+            <>
+              <span className={`folder-icon ${activeFolder}`}>{activeFolderInfo?.icon}</span>
+              <h3>{activeFolderInfo?.label}</h3>
+              <span className="folder-count">{folderEntities.length} cards</span>
+            </>
+          )}
+          <span className="esc-hint">ESC to go back</span>
         </div>
-      )}
+        <div className="folder-contents">
+          <div className="corkboard-inner">
+            {folderEntities.map(entity => (
+              <EntityCard
+                key={entity.id}
+                entity={entity}
+                chapters={chapters}
+                onUpdatePosition={onUpdatePosition}
+                onEdit={() => onEditEntity(entity)}
+                onDelete={() => onDeleteEntity(entity.id)}
+              />
+            ))}
+          </div>
+        </div>
+        <button className="add-entity-btn" onClick={handleAddClick} title="Add card">+</button>
+      </div>
+    );
+  }
+  
+  // Top-level folder view
+  return (
+    <div className="corkboard">
+      <div className="folder-grid">
+        {/* Type-based folders */}
+        {entityTypes.map(et => (
+          <div 
+            key={et.type}
+            className={`entity-folder ${et.type}`}
+            onClick={() => { setActiveFolder(et.type); setIsCustomFolder(false); }}
+            style={{ opacity: counts[et.type] === 0 ? 0.5 : 1 }}
+          >
+            <div className="folder-icon">{et.icon}</div>
+            <div className="folder-label">{et.label}</div>
+            <div className="folder-count">{counts[et.type]} cards</div>
+          </div>
+        ))}
+        
+        {/* Custom folders */}
+        {(customFolders || []).map(folder => (
+          <div 
+            key={folder}
+            className="entity-folder custom"
+            onClick={() => { setActiveFolder(folder); setIsCustomFolder(true); }}
+            style={{ opacity: customCounts[folder] === 0 ? 0.5 : 1 }}
+          >
+            <div className="folder-icon">📁</div>
+            <div className="folder-label">{folder}</div>
+            <div className="folder-count">{customCounts[folder]} cards</div>
+          </div>
+        ))}
+      </div>
+      <button className="add-entity-btn" onClick={handleAddClick} title="Add folder">+</button>
     </div>
   );
 }
@@ -1491,7 +1712,10 @@ function SettingsModal({ geminiKey, onGeminiKeyChange, debugMode, onDebugModeCha
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
-        <h2>Settings</h2>
+        <div className="settings-header">
+          <h2>Settings</h2>
+          <span className="version-badge">v{APP_VERSION}</span>
+        </div>
         
         <div className="settings-section">
           <h3>Gemini API Key</h3>
@@ -1611,12 +1835,18 @@ function ExtractModal({ geminiKey, onGeminiKeyChange, onExtract, onClose }) {
 }
 
 // Entity Edit Modal Component
-function EntityModal({ entity, chapters, onSave, onClose }) {
-  const [form, setForm] = useState(entity || {
-    type: 'character',
-    name: '',
-    description: '',
-    chapterRefs: []
+function EntityModal({ entity, chapters, customFolders = [], defaultType, onSave, onClose }) {
+  const [form, setForm] = useState(() => {
+    if (entity) {
+      return entity;
+    }
+    return {
+      type: defaultType || 'character',
+      name: '',
+      description: '',
+      chapterRefs: [],
+      folder: null
+    };
   });
 
   const handleChapterToggle = (chapterId) => {
@@ -1642,7 +1872,7 @@ function EntityModal({ entity, chapters, onSave, onClose }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
-        <h2>{entity ? 'Edit Card' : 'Add Card'}</h2>
+        <h2>{entity?.id ? 'Edit Card' : 'Add Card'}</h2>
         
         <form onSubmit={handleSubmit}>
           <label>Type</label>
@@ -1673,6 +1903,21 @@ function EntityModal({ entity, chapters, onSave, onClose }) {
             placeholder="Notes, details, observations..."
           />
 
+          {customFolders.length > 0 && (
+            <>
+              <label>Custom Folder</label>
+              <select
+                value={form.folder || ''}
+                onChange={(e) => setForm({ ...form, folder: e.target.value || null })}
+              >
+                <option value="">None</option>
+                {customFolders.map(folder => (
+                  <option key={folder} value={folder}>{folder}</option>
+                ))}
+              </select>
+            </>
+          )}
+
           {chapters.length > 0 && (
             <>
               <label>Appears in Chapters</label>
@@ -1694,6 +1939,54 @@ function EntityModal({ entity, chapters, onSave, onClose }) {
           <div className="modal-actions">
             <button type="button" className="btn" onClick={onClose}>Cancel</button>
             <button type="submit" className="btn btn-primary">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// Add Folder Modal Component
+function AddFolderModal({ existingFolders = [], onAdd, onClose }) {
+  const [name, setName] = useState('');
+  const [error, setError] = useState('');
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setError('Please enter a folder name');
+      return;
+    }
+    if (existingFolders.includes(trimmed)) {
+      setError('A folder with this name already exists');
+      return;
+    }
+    onAdd(trimmed);
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <h2>Add Custom Folder</h2>
+        <p className="help-text" style={{ marginBottom: '16px' }}>
+          Create a custom folder to group cards across types (e.g., "Antagonists", "Act 1", "Red Herrings").
+        </p>
+        
+        <form onSubmit={handleSubmit}>
+          <label>Folder Name</label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => { setName(e.target.value); setError(''); }}
+            placeholder="e.g., Antagonists"
+            autoFocus
+          />
+          {error && <p style={{ color: 'var(--red-pin)', fontSize: '0.8rem', marginTop: '-8px' }}>{error}</p>}
+
+          <div className="modal-actions">
+            <button type="button" className="btn" onClick={onClose}>Cancel</button>
+            <button type="submit" className="btn btn-primary">Add Folder</button>
           </div>
         </form>
       </div>

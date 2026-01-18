@@ -77,7 +77,10 @@ body {
   font-family: inherit;
   font-size: 1.25rem;
   padding: 4px 0;
-  width: 300px;
+  width: 100%;
+  max-width: 500px;
+  min-width: 200px;
+  flex: 1;
 }
 
 .top-bar input[type="text"]:focus {
@@ -467,6 +470,10 @@ body {
   font-size: 0.8rem;
   line-height: 1.4;
   color: var(--ink-light);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .entity-chapters {
@@ -792,4 +799,160 @@ body {
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Settings header with version */
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.settings-header h2 {
+  margin-bottom: 0;
+}
+
+.version-badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  background: var(--cork-dark);
+  color: var(--paper);
+  padding: 4px 10px;
+  border-radius: 12px;
+  letter-spacing: 0.05em;
+}
+
+/* Entity Folders */
+.folder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 24px;
+  padding: 40px;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.entity-folder {
+  background: var(--paper);
+  padding: 20px;
+  box-shadow: 3px 4px 12px rgba(0,0,0,0.2);
+  cursor: pointer;
+  position: relative;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  text-align: center;
+}
+
+.entity-folder:hover {
+  transform: translateY(-4px) rotate(1deg);
+  box-shadow: 6px 8px 20px rgba(0,0,0,0.25);
+}
+
+.entity-folder::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+
+.entity-folder.character::before { background: radial-gradient(circle at 30% 30%, var(--blue-pin), #2a4060); }
+.entity-folder.scene::before { background: radial-gradient(circle at 30% 30%, var(--yellow-pin), #a68012); }
+.entity-folder.location::before { background: radial-gradient(circle at 30% 30%, var(--purple-pin), #5a3a50); }
+.entity-folder.theme::before { background: radial-gradient(circle at 30% 30%, var(--green-pin), #345542); }
+.entity-folder.idea::before { background: radial-gradient(circle at 30% 30%, var(--red-pin), #8b2d23); }
+
+.folder-icon {
+  font-size: 2.5rem;
+  margin-bottom: 12px;
+}
+
+.entity-folder.character .folder-icon { color: var(--blue-pin); }
+.entity-folder.scene .folder-icon { color: var(--yellow-pin); }
+.entity-folder.location .folder-icon { color: var(--purple-pin); }
+.entity-folder.theme .folder-icon { color: var(--green-pin); }
+.entity-folder.idea .folder-icon { color: var(--red-pin); }
+
+.folder-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+
+.folder-count {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--ink-light);
+}
+
+/* Folder view header / breadcrumb */
+.folder-view-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 24px;
+  background: rgba(0,0,0,0.1);
+  border-bottom: 1px solid rgba(0,0,0,0.1);
+}
+
+.folder-view-header h3 {
+  font-size: 1rem;
+  text-transform: capitalize;
+}
+
+.folder-view-header .folder-icon {
+  font-size: 1.25rem;
+  margin-bottom: 0;
+}
+
+/* Cards within folder view */
+.folder-contents {
+  position: relative;
+  min-height: 600px;
+  padding: 40px;
+}
+
+.folder-contents .corkboard-inner {
+  min-width: 1500px;
+  min-height: 1000px;
+}
+
+/* Custom folder styling */
+.entity-folder.custom {
+  border: 2px dashed var(--cork-dark);
+}
+
+.entity-folder.custom::before {
+  background: radial-gradient(circle at 30% 30%, var(--cork-dark), #7a6540);
+}
+
+.entity-folder.custom .folder-icon {
+  color: var(--cork-dark);
+}
+
+/* Folder view header extras */
+.folder-view-header .btn-delete-folder {
+  background: transparent;
+  padding: 4px 8px;
+  font-size: 1rem;
+  margin-left: auto;
+}
+
+.folder-view-header .btn-delete-folder:hover {
+  background: rgba(196, 69, 54, 0.2);
+}
+
+.esc-hint {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  color: var(--ink-light);
+  opacity: 0.6;
+  margin-left: 16px;
 }
