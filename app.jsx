@@ -84,6 +84,7 @@ function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [pendingImport, setPendingImport] = useState(null);
   const [editingEntity, setEditingEntity] = useState(null);
+  const [editingChapterId, setEditingChapterId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
   const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem(STORAGE_KEYS.geminiKey) || '');
@@ -197,6 +198,31 @@ function App() {
       };
     });
   };
+
+  // Update chapter content
+  const updateChapterContent = (chapterId, content) => {
+    setCurrentProject(prev => ({
+      ...prev,
+      chapters: prev.chapters.map(ch => 
+        ch.id === chapterId ? { ...ch, content } : ch
+      )
+    }));
+  };
+
+  // Update chapter title
+  const updateChapterTitle = (chapterId, title) => {
+    setCurrentProject(prev => ({
+      ...prev,
+      chapters: prev.chapters.map(ch => 
+        ch.id === chapterId ? { ...ch, title } : ch
+      )
+    }));
+  };
+
+  // Get current editing chapter
+  const editingChapter = editingChapterId 
+    ? currentProject.chapters.find(ch => ch.id === editingChapterId)
+    : null;
 
   // Parse markdown to internal format
   const parseMarkdown = (markdown) => {
@@ -489,18 +515,23 @@ function App() {
     setShowExtractModal(false);
 
     const fullText = currentProject.chapters.map((ch, i) => `## Chapter ${i + 1}: ${ch.title}\n${ch.content}`).join('\n\n');
-    const truncatedText = fullText.substring(0, 50000);
+    
+    // Truncate if very long, but allow more than before
+    const truncatedText = fullText.substring(0, 80000);
+    const chapterCount = currentProject.chapters.length;
 
     const prompt = `Analyse this novel excerpt and extract the following entities. For each entity, provide a JSON object.
 
 TEXT:
 ${truncatedText}
 
+There are ${chapterCount} chapters in total.
+
 Extract:
 1. CHARACTERS: People mentioned by name. Include their role/description and which chapter numbers they appear in (1-indexed).
-2. THEMES: Major themes or motifs you identify.
+2. THEMES: Major themes or motifs you identify (typically 3-6 themes).
 3. LOCATIONS: Named places or settings.
-4. KEY SCENES: Important dramatic moments or turning points.
+4. SCENES: Extract AT LEAST ONE significant scene per chapter. Each scene should capture what happens in that chapter - the key action, conflict, or development. You must have at least ${chapterCount} scenes (one per chapter minimum).
 
 Respond ONLY with valid JSON in this exact format (no markdown code fences, no explanation, just the JSON):
 {
@@ -508,7 +539,7 @@ Respond ONLY with valid JSON in this exact format (no markdown code fences, no e
     {"type": "character", "name": "Name", "description": "Brief description", "chapterNums": [1, 2]},
     {"type": "theme", "name": "Theme Name", "description": "How it manifests", "chapterNums": []},
     {"type": "location", "name": "Place", "description": "Description", "chapterNums": [1]},
-    {"type": "scene", "name": "Scene Title", "description": "What happens", "chapterNums": [3]}
+    {"type": "scene", "name": "Scene Title", "description": "What happens", "chapterNums": [1]}
   ]
 }`;
 
@@ -522,7 +553,7 @@ Respond ONLY with valid JSON in this exact format (no markdown code fences, no e
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: {
             temperature: 0.3,
-            maxOutputTokens: 8192,
+            maxOutputTokens: 16384,
           }
         })
       });
@@ -539,8 +570,31 @@ Respond ONLY with valid JSON in this exact format (no markdown code fences, no e
         throw new Error('No response from Gemini');
       }
 
-      const cleanedContent = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      const parsed = JSON.parse(cleanedContent);
+      // Clean up response (remove markdown fences if present)
+      let cleanedContent = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      
+      // Try to parse, with better error handling for truncated JSON
+      let parsed;
+      try {
+        parsed = JSON.parse(cleanedContent);
+      } catch (parseError) {
+        // If JSON is truncated, try to salvage what we can
+        console.error('JSON parse error, attempting to salvage:', parseError);
+        
+        // Try to find the last complete entity
+        const lastBracket = cleanedContent.lastIndexOf('}');
+        if (lastBracket > 0) {
+          cleanedContent = cleanedContent.substring(0, lastBracket + 1) + ']}';
+          try {
+            parsed = JSON.parse(cleanedContent);
+            console.log('Salvaged partial JSON response');
+          } catch (e) {
+            throw new Error('Response was truncated and could not be recovered. Try with a shorter manuscript or extract in sections.');
+          }
+        } else {
+          throw new Error('Response was truncated. Try with a shorter manuscript or extract in sections.');
+        }
+      }
       
       const newEntities = parsed.entities.map((entity, index) => ({
         ...entity,
@@ -663,16 +717,28 @@ Respond ONLY with valid JSON in this exact format (no markdown code fences, no e
         <TimelinePanel 
           chapters={currentProject.chapters} 
           onReorder={reorderChapters}
+          onChapterClick={(chapterId) => setEditingChapterId(chapterId)}
+          editingChapterId={editingChapterId}
         />
-        <Corkboard 
-          entities={currentProject.entities}
-          chapters={currentProject.chapters}
-          onUpdatePosition={updateEntityPosition}
-          onEditEntity={(entity) => { setEditingEntity(entity); setShowEntityModal(true); }}
-          onDeleteEntity={deleteEntity}
-          isEmpty={currentProject.chapters.length === 0 && currentProject.entities.length === 0}
-          onImport={() => setShowImportModal(true)}
-        />
+        {editingChapter ? (
+          <ChapterEditor
+            chapter={editingChapter}
+            chapterIndex={currentProject.chapters.findIndex(ch => ch.id === editingChapterId)}
+            onUpdateContent={(content) => updateChapterContent(editingChapterId, content)}
+            onUpdateTitle={(title) => updateChapterTitle(editingChapterId, title)}
+            onClose={() => setEditingChapterId(null)}
+          />
+        ) : (
+          <Corkboard 
+            entities={currentProject.entities}
+            chapters={currentProject.chapters}
+            onUpdatePosition={updateEntityPosition}
+            onEditEntity={(entity) => { setEditingEntity(entity); setShowEntityModal(true); }}
+            onDeleteEntity={deleteEntity}
+            isEmpty={currentProject.chapters.length === 0 && currentProject.entities.length === 0}
+            onImport={() => setShowImportModal(true)}
+          />
+        )}
       </div>
 
       <button 
@@ -760,7 +826,7 @@ function TopBar({ title, onTitleChange, onLibrary, onImport, onExport, onExtract
 }
 
 // Timeline Panel Component
-function TimelinePanel({ chapters, onReorder }) {
+function TimelinePanel({ chapters, onReorder, onChapterClick, editingChapterId }) {
   const [dragIndex, setDragIndex] = useState(null);
   const [dragOverIndex, setDragOverIndex] = useState(null);
 
@@ -801,12 +867,13 @@ function TimelinePanel({ chapters, onReorder }) {
         chapters.map((chapter, index) => (
           <div 
             key={chapter.id} 
-            className={`chapter-card ${dragIndex === index ? 'dragging' : ''} ${dragOverIndex === index ? 'drag-over' : ''}`}
+            className={`chapter-card ${dragIndex === index ? 'dragging' : ''} ${dragOverIndex === index ? 'drag-over' : ''} ${editingChapterId === chapter.id ? 'selected' : ''}`}
             draggable
             onDragStart={(e) => handleDragStart(e, index)}
             onDragOver={(e) => handleDragOver(e, index)}
             onDrop={(e) => handleDrop(e, index)}
             onDragEnd={handleDragEnd}
+            onClick={() => onChapterClick(chapter.id)}
           >
             <div className="chapter-number">Chapter {index + 1}</div>
             <div className="chapter-title">{chapter.title}</div>
@@ -847,6 +914,74 @@ function Corkboard({ entities, chapters, onUpdatePosition, onEditEntity, onDelet
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// Chapter Editor Component
+function ChapterEditor({ chapter, chapterIndex, onUpdateContent, onUpdateTitle, onClose }) {
+  const [title, setTitle] = useState(chapter.title);
+  const [content, setContent] = useState(chapter.content);
+  const textareaRef = useRef(null);
+
+  // Update parent on changes (debounced via onBlur for performance)
+  const handleTitleBlur = () => {
+    if (title !== chapter.title) {
+      onUpdateTitle(title);
+    }
+  };
+
+  const handleContentBlur = () => {
+    if (content !== chapter.content) {
+      onUpdateContent(content);
+    }
+  };
+
+  // Also save on every change for auto-save feel
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (content !== chapter.content) {
+        onUpdateContent(content);
+      }
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [content]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (title !== chapter.title) {
+        onUpdateTitle(title);
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [title]);
+
+  // Word count
+  const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
+
+  return (
+    <div className="chapter-editor">
+      <div className="chapter-editor-header">
+        <button className="btn btn-back" onClick={onClose} title="Back to corkboard">←</button>
+        <span className="chapter-editor-label">Chapter {chapterIndex + 1}</span>
+        <input
+          type="text"
+          className="chapter-editor-title"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          onBlur={handleTitleBlur}
+          placeholder="Chapter title..."
+        />
+        <span className="chapter-editor-wordcount">{wordCount.toLocaleString()} words</span>
+      </div>
+      <textarea
+        ref={textareaRef}
+        className="chapter-editor-content"
+        value={content}
+        onChange={(e) => setContent(e.target.value)}
+        onBlur={handleContentBlur}
+        placeholder="Start writing..."
+      />
     </div>
   );
 }

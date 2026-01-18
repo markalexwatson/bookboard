@@ -268,6 +268,12 @@ body {
   border-top: 3px solid var(--red-pin);
 }
 
+.chapter-card.selected {
+  background: var(--cork-light);
+  transform: rotate(0deg) scale(1.02);
+  box-shadow: 0 0 0 3px var(--blue-pin), 4px 6px 16px rgba(0,0,0,0.2);
+}
+
 .chapter-card::before {
   content: '';
   position: absolute;
@@ -279,6 +285,84 @@ body {
   background: radial-gradient(circle at 30% 30%, var(--red-pin), #8b2d23);
   border-radius: 50%;
   box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+
+.chapter-card.selected::before {
+  background: radial-gradient(circle at 30% 30%, var(--blue-pin), #2a4060);
+}
+
+/* Chapter Editor */
+.chapter-editor {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  overflow: hidden;
+}
+
+.chapter-editor-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--paper-shadow);
+  background: white;
+}
+
+.chapter-editor-header .btn-back {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.chapter-editor-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-light);
+}
+
+.chapter-editor-title {
+  flex: 1;
+  border: none;
+  border-bottom: 1px solid transparent;
+  font-family: 'Libre Baskerville', Georgia, serif;
+  font-size: 1.25rem;
+  font-weight: 700;
+  padding: 4px 0;
+  background: transparent;
+}
+
+.chapter-editor-title:focus {
+  outline: none;
+  border-bottom-color: var(--cork-dark);
+}
+
+.chapter-editor-wordcount {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--ink-light);
+}
+
+.chapter-editor-content {
+  flex: 1;
+  padding: 32px 48px;
+  border: none;
+  resize: none;
+  font-family: 'Libre Baskerville', Georgia, serif;
+  font-size: 1rem;
+  line-height: 1.8;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.chapter-editor-content:focus {
+  outline: none;
+}
+
+.chapter-editor-content::placeholder {
+  color: var(--ink-light);
+  font-style: italic;
 }
 
 .chapter-number {
