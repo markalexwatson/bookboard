@@ -81,6 +81,7 @@ function App() {
   const [showEntityModal, setShowEntityModal] = useState(false);
   const [showExtractModal, setShowExtractModal] = useState(false);
   const [showImportConflictModal, setShowImportConflictModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [pendingImport, setPendingImport] = useState(null);
   const [editingEntity, setEditingEntity] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -575,6 +576,7 @@ Respond ONLY with valid JSON in this exact format (no markdown code fences, no e
         <div className="library-header">
           <h1>Bookboard</h1>
           <div className="library-actions">
+            <button className="btn" onClick={() => setShowSettingsModal(true)}>Settings</button>
             <button className="btn" onClick={() => setShowImportModal(true)}>Import</button>
             <button className="btn btn-primary" onClick={createNewProject}>New Project</button>
           </div>
@@ -630,6 +632,14 @@ Respond ONLY with valid JSON in this exact format (no markdown code fences, no e
             onOverwrite={() => handleConflictResolution('overwrite')}
             onCreateNew={() => handleConflictResolution('new')}
             onCancel={() => handleConflictResolution('cancel')}
+          />
+        )}
+
+        {showSettingsModal && (
+          <SettingsModal
+            geminiKey={geminiKey}
+            onGeminiKeyChange={setGeminiKey}
+            onClose={() => setShowSettingsModal(false)}
           />
         )}
       </div>
@@ -1070,6 +1080,62 @@ function ExportModal({ onExportJson, onExportManuscript, onExportBible, hasChapt
   );
 }
 
+// Settings Modal Component
+function SettingsModal({ geminiKey, onGeminiKeyChange, onClose }) {
+  const [showKey, setShowKey] = useState(false);
+  
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <h2>Settings</h2>
+        
+        <div className="settings-section">
+          <h3>Gemini API Key</h3>
+          <p className="help-text" style={{ marginBottom: '12px' }}>
+            Used for automatic entity extraction (characters, themes, locations, scenes).
+          </p>
+          
+          <div style={{ position: 'relative' }}>
+            <input
+              type={showKey ? 'text' : 'password'}
+              value={geminiKey}
+              onChange={(e) => onGeminiKeyChange(e.target.value)}
+              placeholder="AIzaSy..."
+              style={{ fontFamily: "'JetBrains Mono', monospace", paddingRight: '60px' }}
+            />
+            <button 
+              type="button"
+              className="btn-show-hide"
+              onClick={() => setShowKey(!showKey)}
+            >
+              {showKey ? 'Hide' : 'Show'}
+            </button>
+          </div>
+          
+          <div className="api-key-help">
+            <h4>How to get your Gemini API key:</h4>
+            <ol>
+              <li>Go to <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">aistudio.google.com/apikey</a></li>
+              <li>Sign in with your Google account</li>
+              <li>Click <strong>"Create API key"</strong></li>
+              <li>Choose a project (or create one) and click <strong>"Create"</strong></li>
+              <li>Copy the key and paste it above</li>
+            </ol>
+            <p className="help-text" style={{ marginTop: '12px' }}>
+              The free tier includes 15 requests/minute. If you have Gemini Pro, you get higher limits.
+              Your key is stored only in your browser—it's never sent anywhere except directly to Google's API.
+            </p>
+          </div>
+        </div>
+
+        <div className="modal-actions">
+          <button className="btn btn-primary" onClick={onClose}>Done</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Extract Modal Component (Gemini API)
 function ExtractModal({ geminiKey, onGeminiKeyChange, onExtract, onClose }) {
   return (
@@ -1080,22 +1146,30 @@ function ExtractModal({ geminiKey, onGeminiKeyChange, onExtract, onClose }) {
           Use Gemini AI to automatically extract characters, themes, locations, and key scenes from your manuscript.
         </p>
         
-        <div className="api-key-section">
-          <label>Gemini API Key</label>
-          <input
-            type="password"
-            value={geminiKey}
-            onChange={(e) => onGeminiKeyChange(e.target.value)}
-            placeholder="AIza..."
-            style={{ fontFamily: "'JetBrains Mono', monospace" }}
-          />
-          <p className="help-text" style={{ marginTop: '8px' }}>
-            Get a key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--blue-pin)' }}>aistudio.google.com/apikey</a>
-          </p>
-          <p className="help-text">
-            Your key is stored only in your browser's localStorage.
-          </p>
-        </div>
+        {geminiKey ? (
+          <div className="api-key-section">
+            <p style={{ color: 'var(--green-pin)', marginBottom: '12px' }}>
+              ✓ Gemini API key configured
+            </p>
+            <p className="help-text">
+              You can update your key in Settings from the library view.
+            </p>
+          </div>
+        ) : (
+          <div className="api-key-section">
+            <label>Gemini API Key</label>
+            <input
+              type="password"
+              value={geminiKey}
+              onChange={(e) => onGeminiKeyChange(e.target.value)}
+              placeholder="AIzaSy..."
+              style={{ fontFamily: "'JetBrains Mono', monospace" }}
+            />
+            <p className="help-text" style={{ marginTop: '8px' }}>
+              Get a key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--blue-pin)' }}>aistudio.google.com/apikey</a> — or configure it in Settings.
+            </p>
+          </div>
+        )}
 
         <div className="modal-actions">
           <button className="btn" onClick={onClose}>Cancel</button>

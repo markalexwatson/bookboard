@@ -602,6 +602,63 @@ body {
   font-family: 'JetBrains Mono', monospace;
 }
 
+/* Settings Modal */
+.settings-section {
+  margin-bottom: 24px;
+}
+
+.settings-section h3 {
+  font-size: 1rem;
+  margin-bottom: 8px;
+  color: var(--ink);
+}
+
+.settings-section h4 {
+  font-size: 0.85rem;
+  margin-bottom: 8px;
+  color: var(--ink);
+}
+
+.btn-show-hide {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--blue-pin);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.btn-show-hide:hover {
+  color: var(--ink);
+}
+
+.api-key-help {
+  background: rgba(0,0,0,0.03);
+  padding: 16px;
+  margin-top: 16px;
+  border-left: 3px solid var(--cork-dark);
+}
+
+.api-key-help ol {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.api-key-help li {
+  font-size: 0.85rem;
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
+
+.api-key-help a {
+  color: var(--blue-pin);
+}
+
 /* Loading State */
 .loading-overlay {
   position: fixed;
