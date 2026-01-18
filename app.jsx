@@ -533,7 +533,7 @@ function App() {
   };
 
   // Find empty position for new entity card
-  const findEmptyPosition = (existingEntities, startX = 80, startY = 60) => {
+  const findEmptyPosition = (existingPositions, startX = 80, startY = 60) => {
     const cardWidth = 240;
     const cardHeight = 200;
     const maxX = 1600;
@@ -542,19 +542,19 @@ function App() {
     let y = startY;
     
     const isOverlapping = (testX, testY) => {
-      return existingEntities.some(e => {
-        const ex = e.position?.x || 0;
-        const ey = e.position?.y || 0;
-        return Math.abs(testX - ex) < cardWidth && Math.abs(testY - ey) < cardHeight;
+      return existingPositions.some(pos => {
+        return Math.abs(testX - pos.x) < cardWidth && Math.abs(testY - pos.y) < cardHeight;
       });
     };
     
-    while (isOverlapping(x, y)) {
+    let iterations = 0;
+    while (isOverlapping(x, y) && iterations < 100) {
       x += cardWidth;
       if (x > maxX) {
         x = startX;
         y += cardHeight;
       }
+      iterations++;
     }
     
     return { x, y };
@@ -582,7 +582,7 @@ function App() {
     setShowExtractModal(true);
   };
 
-  // Extract entities using Gemini API - with chunking for large documents
+  // Extract entities using Gemini API
   const extractEntities = async () => {
     if (!geminiKey) {
       alert('Please enter your Gemini API key');
@@ -595,179 +595,233 @@ function App() {
     }
 
     setLoading(true);
+    setLoadingMessage('Analysing manuscript...');
     setShowExtractModal(false);
     clearLog();
-    log('Starting extraction', { chapterCount: currentProject.chapters.length });
+    
+    try {
+      const chapterCount = currentProject.chapters.length;
+      log('Starting extraction', { chapterCount });
 
-    const chapterCount = currentProject.chapters.length;
-    const allNewEntities = [];
-    
-    // Process in chunks of chapters to avoid token limits
-    const chunkSize = 3; // Process 3 chapters at a time
-    const chunks = [];
-    
-    for (let i = 0; i < chapterCount; i += chunkSize) {
-      chunks.push(currentProject.chapters.slice(i, i + chunkSize));
-    }
-    
-    log('Processing in chunks', { totalChunks: chunks.length, chunkSize });
-
-    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
-      const chunk = chunks[chunkIndex];
-      const startChapterNum = chunkIndex * chunkSize + 1;
-      
-      setLoadingMessage(`Analysing chapters ${startChapterNum}-${startChapterNum + chunk.length - 1} of ${chapterCount}...`);
-      
-      const chunkText = chunk.map((ch, i) => 
-        `## Chapter ${startChapterNum + i}: ${ch.title}\n${ch.content}`
+      // Build full text
+      const fullText = currentProject.chapters.map((ch, i) => 
+        `## Section ${i + 1}: ${ch.title}\n${ch.content}`
       ).join('\n\n');
       
-      log(`Processing chunk ${chunkIndex + 1}`, { 
-        chapters: chunk.map((c, i) => startChapterNum + i),
-        textLength: chunkText.length 
-      });
+      log('Full text prepared', { length: fullText.length });
 
-      const prompt = `Analyse this novel excerpt and extract entities. This is chapters ${startChapterNum}-${startChapterNum + chunk.length - 1} of a ${chapterCount}-chapter novel.
+      // Decide whether to chunk based on size
+      const CHUNK_THRESHOLD = 200000;
+      const needsChunking = fullText.length > CHUNK_THRESHOLD;
+      
+      let allNewEntities = [];
+
+      if (!needsChunking) {
+        // Single request for smaller documents
+        log('Processing as single request');
+        setLoadingMessage('Analysing manuscript...');
+        
+        const entities = await extractChunk(fullText, 1, chapterCount, chapterCount);
+        log('Single request complete', { entities: entities?.length });
+        if (entities) {
+          allNewEntities = entities;
+        }
+      } else {
+        // Chunk for larger documents
+        const chunkSize = 3;
+        const chunks = [];
+        
+        for (let i = 0; i < chapterCount; i += chunkSize) {
+          chunks.push({
+            chapters: currentProject.chapters.slice(i, i + chunkSize),
+            startNum: i + 1
+          });
+        }
+        
+        log('Processing in chunks', { totalChunks: chunks.length, chunkSize });
+
+        for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+          const { chapters, startNum } = chunks[chunkIndex];
+          const endNum = startNum + chapters.length - 1;
+          
+          setLoadingMessage(`Analysing sections ${startNum}-${endNum} of ${chapterCount}...`);
+          
+          const chunkText = chapters.map((ch, i) => 
+            `## Section ${startNum + i}: ${ch.title}\n${ch.content}`
+          ).join('\n\n');
+          
+          log(`Processing chunk ${chunkIndex + 1}`, { startNum, endNum, textLength: chunkText.length });
+
+          try {
+            const entities = await extractChunk(chunkText, startNum, endNum, chapterCount);
+            log(`Chunk ${chunkIndex + 1} complete`, { entities: entities?.length });
+            if (entities) {
+              allNewEntities.push(...entities);
+            }
+          } catch (error) {
+            log('Chunk failed, continuing', { chunkIndex, error: error.message });
+          }
+        }
+      }
+
+      log('All API calls complete', { totalEntities: allNewEntities.length });
+
+      if (allNewEntities.length === 0) {
+        log('No entities extracted');
+        alert('No entities could be extracted. Check the debug log for details.');
+        setLoading(false);
+        return;
+      }
+
+      // Deduplicate entities by name+type
+      log('Starting deduplication');
+      const seen = new Set();
+      const deduped = [];
+      for (const entity of allNewEntities) {
+        const key = `${entity.type}:${entity.name.toLowerCase().trim()}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          deduped.push(entity);
+        } else {
+          const existing = deduped.find(e => `${e.type}:${e.name.toLowerCase().trim()}` === key);
+          if (existing && entity.chapterNums) {
+            existing.chapterNums = [...new Set([...(existing.chapterNums || []), ...entity.chapterNums])].sort((a,b) => a-b);
+          }
+        }
+      }
+      
+      log('Deduplication complete', { before: allNewEntities.length, after: deduped.length });
+
+      // Position entities
+      log('Starting positioning');
+      const existingPositions = currentProject.entities.map(e => e.position || { x: 0, y: 0 });
+      const newPositions = [];
+      const finalEntities = [];
+      
+      for (let i = 0; i < deduped.length; i++) {
+        const entity = deduped[i];
+        const position = findEmptyPosition([...existingPositions, ...newPositions]);
+        newPositions.push(position);
+        
+        finalEntities.push({
+          ...entity,
+          id: generateId('ent'),
+          chapterRefs: (entity.chapterNums || [])
+            .map(num => currentProject.chapters[num - 1]?.id)
+            .filter(Boolean),
+          position
+        });
+      }
+      
+      // Remove chapterNums from final entities
+      finalEntities.forEach(e => delete e.chapterNums);
+
+      log('Positioning complete', { count: finalEntities.length });
+
+      log('Updating project state');
+      setCurrentProject(prev => ({
+        ...prev,
+        entities: [...prev.entities, ...finalEntities]
+      }));
+
+      log('Extraction complete');
+      setLoading(false);
+      
+    } catch (error) {
+      log('FATAL ERROR', { message: error.message, stack: error.stack });
+      console.error('Extraction error:', error);
+      alert(`Extraction failed: ${error.message}`);
+      setLoading(false);
+    }
+  };
+
+  // Helper function to extract from a chunk of text
+  const extractChunk = async (text, startNum, endNum, totalSections) => {
+    const sectionCount = endNum - startNum + 1;
+    const sectionRange = startNum === endNum ? `section ${startNum}` : `sections ${startNum}-${endNum}`;
+    
+    const prompt = `Analyse this text and extract entities. This is ${sectionRange} of a ${totalSections}-section work.
 
 TEXT:
-${chunkText}
+${text}
 
-Extract from THESE chapters only:
-1. CHARACTERS: People mentioned by name in these chapters. Include their role/description.
-2. THEMES: Major themes or motifs evident in these chapters.
-3. LOCATIONS: Named places or settings in these chapters.
-4. SCENES: Extract AT LEAST ONE significant scene per chapter. You have ${chunk.length} chapters here, so provide at least ${chunk.length} scenes. Each scene should capture the key action or development in that chapter.
+Extract:
+1. CHARACTERS: People mentioned by name. Include their role/description and which section numbers they appear in (${startNum}-${endNum}).
+2. THEMES: Major themes or motifs (typically 2-4 for this excerpt).
+3. LOCATIONS: Named places or settings.
+4. SCENES: Extract AT LEAST ONE significant scene per section. You have ${sectionCount} sections, so provide at least ${sectionCount} scenes. Each scene should capture the key action or development.
 
-For chapterNums, use the actual chapter numbers (${startChapterNum}-${startChapterNum + chunk.length - 1}).
+Use section numbers ${startNum}-${endNum} for chapterNums field.
 
 Respond ONLY with valid JSON (no markdown fences, no explanation):
 {
   "entities": [
-    {"type": "character", "name": "Name", "description": "Brief description", "chapterNums": [${startChapterNum}]},
-    {"type": "theme", "name": "Theme Name", "description": "How it manifests", "chapterNums": [${startChapterNum}]},
-    {"type": "location", "name": "Place", "description": "Description", "chapterNums": [${startChapterNum}]},
-    {"type": "scene", "name": "Scene Title", "description": "What happens", "chapterNums": [${startChapterNum}]}
+    {"type": "character", "name": "Name", "description": "Brief description", "chapterNums": [${startNum}]},
+    {"type": "theme", "name": "Theme Name", "description": "How it manifests", "chapterNums": [${startNum}]},
+    {"type": "location", "name": "Place", "description": "Description", "chapterNums": [${startNum}]},
+    {"type": "scene", "name": "Scene Title", "description": "What happens", "chapterNums": [${startNum}]}
   ]
 }`;
 
-      try {
-        log('Sending API request', { promptLength: prompt.length });
-        
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0.3,
-              maxOutputTokens: 8192,
-            }
-          })
-        });
-
-        if (!response.ok) {
-          const error = await response.json();
-          log('API error', error);
-          throw new Error(error.error?.message || 'API request failed');
-        }
-
-        const data = await response.json();
-        const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        
-        log('API response received', { 
-          contentLength: content?.length,
-          finishReason: data.candidates?.[0]?.finishReason 
-        });
-        
-        if (!content) {
-          log('No content in response', data);
-          throw new Error('No response from Gemini');
-        }
-
-        let cleanedContent = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-        
-        let parsed;
-        try {
-          parsed = JSON.parse(cleanedContent);
-          log('JSON parsed successfully', { entityCount: parsed.entities?.length });
-        } catch (parseError) {
-          log('JSON parse error, attempting salvage', { error: parseError.message });
-          const lastBracket = cleanedContent.lastIndexOf('}');
-          if (lastBracket > 0) {
-            cleanedContent = cleanedContent.substring(0, lastBracket + 1) + ']}';
-            try {
-              parsed = JSON.parse(cleanedContent);
-              log('Salvaged partial JSON', { entityCount: parsed.entities?.length });
-            } catch (e) {
-              log('Salvage failed', { error: e.message });
-              continue; // Skip this chunk but continue with others
-            }
-          } else {
-            continue;
-          }
-        }
-        
-        // Add entities from this chunk
-        if (parsed.entities) {
-          allNewEntities.push(...parsed.entities);
-        }
-        
-      } catch (error) {
-        log('Chunk extraction failed', { error: error.message, chunkIndex });
-        console.error(`Chunk ${chunkIndex + 1} extraction failed:`, error);
-        // Continue with other chunks
-      }
-    }
-
-    log('All chunks processed', { totalEntities: allNewEntities.length });
-
-    // Deduplicate entities by name+type
-    const seen = new Set();
-    const deduped = [];
-    for (const entity of allNewEntities) {
-      const key = `${entity.type}:${entity.name.toLowerCase()}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        deduped.push(entity);
-      } else {
-        // Merge chapter refs for duplicates
-        const existing = deduped.find(e => `${e.type}:${e.name.toLowerCase()}` === key);
-        if (existing && entity.chapterNums) {
-          existing.chapterNums = [...new Set([...(existing.chapterNums || []), ...entity.chapterNums])];
-        }
-      }
-    }
+    log('Sending API request', { sectionRange, promptLength: prompt.length });
     
-    log('Deduplication complete', { before: allNewEntities.length, after: deduped.length });
-
-    // Position entities, avoiding existing ones
-    const existingEntities = [...currentProject.entities];
-    const finalEntities = deduped.map((entity) => {
-      const position = findEmptyPosition([...existingEntities, ...finalEntities.filter(e => e.position)]);
-      const newEntity = {
-        ...entity,
-        id: generateId('ent'),
-        chapterRefs: (entity.chapterNums || [])
-          .map(num => currentProject.chapters[num - 1]?.id)
-          .filter(Boolean),
-        position
-      };
-      delete newEntity.chapterNums;
-      return newEntity;
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 16384,
+        }
+      })
     });
 
-    log('Final entities positioned', { count: finalEntities.length });
-
-    setCurrentProject(prev => ({
-      ...prev,
-      entities: [...prev.entities, ...finalEntities]
-    }));
-
-    setLoading(false);
-    
-    if (debugMode) {
-      console.log('Extraction complete. Debug log available in Settings.');
+    if (!response.ok) {
+      const error = await response.json();
+      log('API error', error);
+      throw new Error(error.error?.message || 'API request failed');
     }
+
+    const data = await response.json();
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    
+    log('API response received', { 
+      contentLength: content?.length,
+      finishReason: data.candidates?.[0]?.finishReason 
+    });
+    
+    if (!content) {
+      log('No content in response', data);
+      throw new Error('No response from Gemini');
+    }
+
+    let cleanedContent = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    
+    let parsed;
+    try {
+      parsed = JSON.parse(cleanedContent);
+      log('JSON parsed successfully', { entityCount: parsed.entities?.length });
+    } catch (parseError) {
+      log('JSON parse error, attempting salvage', { error: parseError.message, content: cleanedContent.substring(0, 500) });
+      
+      // Try to salvage truncated JSON
+      const lastCompleteEntity = cleanedContent.lastIndexOf('},');
+      if (lastCompleteEntity > 0) {
+        cleanedContent = cleanedContent.substring(0, lastCompleteEntity + 1) + ']}';
+        try {
+          parsed = JSON.parse(cleanedContent);
+          log('Salvaged partial JSON', { entityCount: parsed.entities?.length });
+        } catch (e) {
+          log('Salvage failed', { error: e.message });
+          throw new Error('Response was truncated and could not be recovered');
+        }
+      } else {
+        throw new Error('Invalid JSON response');
+      }
+    }
+    
+    return parsed.entities || [];
   };
 
   // Render library or editor view
