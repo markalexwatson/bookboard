@@ -4,15 +4,171 @@ const { useState, useEffect, useRef, useCallback } = React;
 const generateId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
 // App version
-const APP_VERSION = '2.1';
+const APP_VERSION = '2.2';
 
-// Storage keys
+// Storage keys (all local-only, not synced to Drive)
 const STORAGE_KEYS = {
   projectIndex: 'bookboard-index',
   projectPrefix: 'bookboard-project-',
   geminiKey: 'bookboard-gemini-key',
+  googleClientId: 'bookboard-google-client-id',
   lastOpenedProject: 'bookboard-last-opened',
   debugMode: 'bookboard-debug-mode'
+};
+
+// Google Drive API configuration
+const DRIVE_FOLDER_NAME = 'Bookboard';
+const DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive.file';
+
+// Google Drive helper functions
+let googleTokenClient = null;
+let googleAccessToken = null;
+
+const initGoogleAuth = (clientId, onSuccess, onError) => {
+  if (!clientId) {
+    onError('No Google Client ID configured');
+    return;
+  }
+  
+  try {
+    googleTokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: DRIVE_SCOPES,
+      callback: (response) => {
+        if (response.access_token) {
+          googleAccessToken = response.access_token;
+          onSuccess(response.access_token);
+        } else {
+          onError('Failed to get access token');
+        }
+      },
+      error_callback: (error) => {
+        onError(error.message || 'Auth failed');
+      }
+    });
+  } catch (e) {
+    onError(e.message);
+  }
+};
+
+const requestGoogleAuth = () => {
+  if (googleTokenClient) {
+    googleTokenClient.requestAccessToken();
+  }
+};
+
+const getOrCreateBookboardFolder = async (accessToken) => {
+  // Search for existing folder
+  const searchResponse = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q=name='${DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false&fields=files(id,name)`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  const searchData = await searchResponse.json();
+  
+  if (searchData.files && searchData.files.length > 0) {
+    return searchData.files[0].id;
+  }
+  
+  // Create folder if it doesn't exist
+  const createResponse = await fetch('https://www.googleapis.com/drive/v3/files', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      name: DRIVE_FOLDER_NAME,
+      mimeType: 'application/vnd.google-apps.folder'
+    })
+  });
+  const createData = await createResponse.json();
+  return createData.id;
+};
+
+const saveProjectToDrive = async (accessToken, project) => {
+  const folderId = await getOrCreateBookboardFolder(accessToken);
+  const fileName = `${project.id}.json`;
+  
+  // Check if file already exists
+  const searchResponse = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q=name='${fileName}' and '${folderId}' in parents and trashed=false&fields=files(id)`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  const searchData = await searchResponse.json();
+  
+  const projectData = JSON.stringify(project, null, 2);
+  const blob = new Blob([projectData], { type: 'application/json' });
+  
+  const metadata = {
+    name: fileName,
+    mimeType: 'application/json'
+  };
+  
+  if (searchData.files && searchData.files.length > 0) {
+    // Update existing file
+    const fileId = searchData.files[0].id;
+    const form = new FormData();
+    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+    form.append('file', blob);
+    
+    await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: form
+    });
+  } else {
+    // Create new file
+    metadata.parents = [folderId];
+    const form = new FormData();
+    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+    form.append('file', blob);
+    
+    await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: form
+    });
+  }
+  
+  return true;
+};
+
+const listDriveProjects = async (accessToken) => {
+  const folderId = await getOrCreateBookboardFolder(accessToken);
+  
+  const response = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q='${folderId}' in parents and mimeType='application/json' and trashed=false&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  const data = await response.json();
+  return data.files || [];
+};
+
+const loadProjectFromDrive = async (accessToken, fileId) => {
+  const response = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  const project = await response.json();
+  return project;
+};
+
+const deleteProjectFromDrive = async (accessToken, projectId) => {
+  const folderId = await getOrCreateBookboardFolder(accessToken);
+  const fileName = `${projectId}.json`;
+  
+  const searchResponse = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q=name='${fileName}' and '${folderId}' in parents and trashed=false&fields=files(id)`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  const searchData = await searchResponse.json();
+  
+  if (searchData.files && searchData.files.length > 0) {
+    await fetch(`https://www.googleapis.com/drive/v3/files/${searchData.files[0].id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+  }
 };
 
 // Debug log storage (in memory, not persisted)
@@ -116,6 +272,7 @@ function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showAddFolderModal, setShowAddFolderModal] = useState(false);
   const [showMergeModal, setShowMergeModal] = useState(false);
+  const [showDriveModal, setShowDriveModal] = useState(false);
   const [pendingImport, setPendingImport] = useState(null);
   const [editingEntity, setEditingEntity] = useState(null);
   const [editingChapterId, setEditingChapterId] = useState(null);
@@ -124,6 +281,9 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
   const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem(STORAGE_KEYS.geminiKey) || '');
+  const [googleClientId, setGoogleClientId] = useState(() => localStorage.getItem(STORAGE_KEYS.googleClientId) || '');
+  const [googleAuthStatus, setGoogleAuthStatus] = useState('not_configured'); // 'not_configured', 'signed_out', 'signed_in'
+  const [driveProjects, setDriveProjects] = useState([]);
   const [debugMode, setDebugMode] = useState(() => localStorage.getItem(STORAGE_KEYS.debugMode) === 'true');
 
   // Save debug mode when it changes
@@ -137,6 +297,120 @@ function App() {
       localStorage.setItem(STORAGE_KEYS.geminiKey, geminiKey);
     }
   }, [geminiKey]);
+
+  // Save Google Client ID when it changes
+  useEffect(() => {
+    if (googleClientId) {
+      localStorage.setItem(STORAGE_KEYS.googleClientId, googleClientId);
+      setGoogleAuthStatus('signed_out');
+    } else {
+      setGoogleAuthStatus('not_configured');
+    }
+  }, [googleClientId]);
+
+  // Initialize Google Auth when client ID is available
+  useEffect(() => {
+    if (googleClientId && typeof google !== 'undefined') {
+      initGoogleAuth(
+        googleClientId,
+        (token) => {
+          setGoogleAuthStatus('signed_in');
+          // Refresh drive projects list
+          listDriveProjects(token).then(setDriveProjects).catch(console.error);
+        },
+        (error) => {
+          console.error('Google auth error:', error);
+          setGoogleAuthStatus('signed_out');
+        }
+      );
+    }
+  }, [googleClientId]);
+
+  // Handle Google Sign In
+  const handleGoogleSignIn = () => {
+    if (!googleClientId) {
+      alert('Please configure your Google Client ID in Settings first.');
+      setShowSettingsModal(true);
+      return;
+    }
+    requestGoogleAuth();
+  };
+
+  // Save current project to Drive
+  const handleSaveToDrive = async () => {
+    if (!googleAccessToken || !currentProject) return;
+    
+    setLoading(true);
+    setLoadingMessage('Saving to Google Drive...');
+    try {
+      await saveProjectToDrive(googleAccessToken, currentProject);
+      const projects = await listDriveProjects(googleAccessToken);
+      setDriveProjects(projects);
+      alert('Project saved to Google Drive!');
+    } catch (error) {
+      console.error('Save to Drive error:', error);
+      alert('Failed to save to Drive: ' + error.message);
+    }
+    setLoading(false);
+  };
+
+  // Save all local projects to Drive
+  const handleSaveAllToDrive = async () => {
+    if (!googleAccessToken) return;
+    
+    setLoading(true);
+    const index = loadProjectIndex();
+    for (let i = 0; i < index.length; i++) {
+      setLoadingMessage(`Saving to Drive... (${i + 1}/${index.length})`);
+      const project = loadProject(index[i].id);
+      if (project) {
+        try {
+          await saveProjectToDrive(googleAccessToken, project);
+        } catch (error) {
+          console.error(`Failed to save ${project.title}:`, error);
+        }
+      }
+    }
+    const projects = await listDriveProjects(googleAccessToken);
+    setDriveProjects(projects);
+    setLoading(false);
+    alert('All projects saved to Google Drive!');
+  };
+
+  // Load a project from Drive
+  const handleLoadFromDrive = async (fileId, fileName) => {
+    if (!googleAccessToken) return;
+    
+    setLoading(true);
+    setLoadingMessage('Loading from Google Drive...');
+    try {
+      const project = await loadProjectFromDrive(googleAccessToken, fileId);
+      
+      // Check if project with same ID exists locally
+      const existingLocal = loadProject(project.id);
+      if (existingLocal) {
+        const useLocal = confirm(
+          `"${project.title}" exists locally (updated ${new Date(existingLocal.updatedAt).toLocaleString()}).\n` +
+          `Drive version updated ${new Date(project.updatedAt).toLocaleString()}.\n\n` +
+          `Click OK to replace local with Drive version, or Cancel to keep local.`
+        );
+        if (!useLocal) {
+          setLoading(false);
+          return;
+        }
+      }
+      
+      // Save to local storage
+      saveProject(project);
+      setProjectIndex(loadProjectIndex());
+      setShowDriveModal(false);
+      alert(`Loaded "${project.title}" from Drive!`);
+    } catch (error) {
+      console.error('Load from Drive error:', error);
+      alert('Failed to load from Drive: ' + error.message);
+    }
+    setLoading(false);
+  };
 
   // Auto-save current project when it changes
   useEffect(() => {
@@ -1040,6 +1314,20 @@ Respond ONLY with valid JSON (no markdown fences, no explanation):
         <div className="library-header">
           <h1>Bookboard</h1>
           <div className="library-actions">
+            {googleAuthStatus === 'signed_in' ? (
+              <>
+                <button className="btn btn-drive" onClick={() => setShowDriveModal(true)} title="Google Drive">
+                  ☁️ Drive
+                </button>
+                <button className="btn btn-drive" onClick={handleSaveAllToDrive} title="Save all to Drive">
+                  ⬆️ Sync All
+                </button>
+              </>
+            ) : googleAuthStatus === 'signed_out' ? (
+              <button className="btn btn-drive" onClick={handleGoogleSignIn} title="Sign in to Google">
+                ☁️ Sign In
+              </button>
+            ) : null}
             <button className="btn" onClick={() => setShowSettingsModal(true)}>Settings</button>
             <button className="btn" onClick={() => setShowImportModal(true)}>Import</button>
             <button className="btn btn-primary" onClick={createNewProject}>New Project</button>
@@ -1055,6 +1343,11 @@ Respond ONLY with valid JSON (no markdown fences, no explanation):
                 <button className="btn" onClick={() => setShowImportModal(true)}>Import</button>
                 <button className="btn btn-primary" onClick={createNewProject}>New Project</button>
               </div>
+              {googleAuthStatus === 'signed_in' && driveProjects.length > 0 && (
+                <p style={{ marginTop: '16px' }}>
+                  Or <button className="btn-link" onClick={() => setShowDriveModal(true)}>load from Google Drive</button>
+                </p>
+              )}
             </div>
           ) : (
             <div className="project-grid">
@@ -1099,10 +1392,28 @@ Respond ONLY with valid JSON (no markdown fences, no explanation):
           />
         )}
 
+        {showDriveModal && (
+          <DriveModal
+            projects={driveProjects}
+            onLoad={handleLoadFromDrive}
+            onRefresh={async () => {
+              if (googleAccessToken) {
+                const projects = await listDriveProjects(googleAccessToken);
+                setDriveProjects(projects);
+              }
+            }}
+            onClose={() => setShowDriveModal(false)}
+          />
+        )}
+
         {showSettingsModal && (
           <SettingsModal
             geminiKey={geminiKey}
             onGeminiKeyChange={setGeminiKey}
+            googleClientId={googleClientId}
+            onGoogleClientIdChange={setGoogleClientId}
+            googleAuthStatus={googleAuthStatus}
+            onGoogleSignIn={handleGoogleSignIn}
             debugMode={debugMode}
             onDebugModeChange={setDebugMode}
             onClose={() => setShowSettingsModal(false)}
@@ -1123,6 +1434,8 @@ Respond ONLY with valid JSON (no markdown fences, no explanation):
         onExport={() => setShowExportModal(true)}
         onExtract={handleExtractClick}
         hasChapters={currentProject.chapters.length > 0}
+        googleAuthStatus={googleAuthStatus}
+        onSaveToDrive={handleSaveToDrive}
       />
       
       <div className="main-layout">
@@ -1238,7 +1551,7 @@ Respond ONLY with valid JSON (no markdown fences, no explanation):
 }
 
 // Top Bar Component (Editor view)
-function TopBar({ title, onTitleChange, onLibrary, onImport, onExport, onExtract, hasChapters }) {
+function TopBar({ title, onTitleChange, onLibrary, onImport, onExport, onExtract, hasChapters, googleAuthStatus, onSaveToDrive }) {
   return (
     <div className="top-bar">
       <button className="btn btn-back" onClick={onLibrary} title="Back to library">←</button>
@@ -1254,6 +1567,9 @@ function TopBar({ title, onTitleChange, onLibrary, onImport, onExport, onExtract
         <button className="btn btn-secondary" onClick={onExtract}>Extract</button>
       )}
       <button className="btn btn-primary" onClick={onExport}>Export</button>
+      {googleAuthStatus === 'signed_in' && (
+        <button className="btn btn-drive" onClick={onSaveToDrive} title="Save to Google Drive">☁️</button>
+      )}
     </div>
   );
 }
@@ -1900,8 +2216,55 @@ function ExportModal({ onExportJson, onExportManuscript, onExportBible, hasChapt
 }
 
 // Settings Modal Component
-function SettingsModal({ geminiKey, onGeminiKeyChange, debugMode, onDebugModeChange, onClose }) {
+// Drive Modal Component - List and load projects from Google Drive
+function DriveModal({ projects, onLoad, onRefresh, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal modal-wide" onClick={e => e.stopPropagation()}>
+        <h2>Google Drive Projects</h2>
+        <p style={{ marginBottom: '20px', color: 'var(--ink-light)' }}>
+          Projects stored in your Google Drive "Bookboard" folder.
+        </p>
+        
+        {projects.length === 0 ? (
+          <div className="empty-state" style={{ padding: '40px 20px' }}>
+            <p>No projects found on Google Drive.</p>
+            <p className="help-text">Use "Sync All" to upload your local projects.</p>
+          </div>
+        ) : (
+          <div className="drive-project-list">
+            {projects.map(file => (
+              <div key={file.id} className="drive-project-item">
+                <div className="drive-project-info">
+                  <span className="drive-project-name">{file.name.replace('.json', '')}</span>
+                  <span className="drive-project-date">
+                    Modified: {new Date(file.modifiedTime).toLocaleString()}
+                  </span>
+                </div>
+                <button 
+                  className="btn btn-small"
+                  onClick={() => onLoad(file.id, file.name)}
+                >
+                  Load
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="modal-actions">
+          <button className="btn" onClick={onRefresh}>Refresh</button>
+          <button className="btn btn-primary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Settings Modal Component
+function SettingsModal({ geminiKey, onGeminiKeyChange, googleClientId, onGoogleClientIdChange, googleAuthStatus, onGoogleSignIn, debugMode, onDebugModeChange, onClose }) {
   const [showKey, setShowKey] = useState(false);
+  const [showClientId, setShowClientId] = useState(false);
   
   const downloadLog = () => {
     const logText = getLogText();
@@ -1920,12 +2283,66 @@ function SettingsModal({ geminiKey, onGeminiKeyChange, debugMode, onDebugModeCha
   
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={e => e.stopPropagation()}>
+      <div className="modal modal-wide" onClick={e => e.stopPropagation()}>
         <div className="settings-header">
           <h2>Settings</h2>
           <span className="version-badge">v{APP_VERSION}</span>
         </div>
         
+        <div className="settings-section">
+          <h3>Google Drive Sync</h3>
+          <p className="help-text" style={{ marginBottom: '12px' }}>
+            Sync your projects across devices using Google Drive. Your API keys stay local and are never synced.
+          </p>
+          
+          <div style={{ position: 'relative' }}>
+            <label style={{ fontSize: '0.85rem', fontWeight: '500' }}>Google OAuth Client ID</label>
+            <input
+              type={showClientId ? 'text' : 'password'}
+              value={googleClientId}
+              onChange={(e) => onGoogleClientIdChange(e.target.value)}
+              placeholder="xxxxx.apps.googleusercontent.com"
+              style={{ fontFamily: "'JetBrains Mono', monospace", paddingRight: '60px', fontSize: '0.8rem' }}
+            />
+            <button 
+              type="button"
+              className="btn-show-hide"
+              onClick={() => setShowClientId(!showClientId)}
+            >
+              {showClientId ? 'Hide' : 'Show'}
+            </button>
+          </div>
+          
+          {googleClientId && (
+            <div style={{ marginTop: '12px' }}>
+              {googleAuthStatus === 'signed_in' ? (
+                <p style={{ color: 'var(--green-pin)' }}>✓ Signed in to Google</p>
+              ) : (
+                <button className="btn" onClick={onGoogleSignIn}>Sign in to Google</button>
+              )}
+            </div>
+          )}
+          
+          <details className="api-key-help" style={{ marginTop: '16px' }}>
+            <summary style={{ cursor: 'pointer', fontWeight: '500' }}>How to set up Google Drive sync</summary>
+            <ol>
+              <li>Go to <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer">Google Cloud Console</a></li>
+              <li>Select your project (or create one)</li>
+              <li>Enable <strong>Google Drive API</strong> (APIs & Services → Enable APIs)</li>
+              <li>Go to <strong>Credentials</strong> → <strong>Create Credentials</strong> → <strong>OAuth client ID</strong></li>
+              <li>Choose <strong>Web application</strong></li>
+              <li>Add your URL to <strong>Authorized JavaScript origins</strong>:
+                <ul>
+                  <li><code>http://localhost:8000</code> (for local dev)</li>
+                  <li>Your GitHub Pages URL (if hosted there)</li>
+                </ul>
+              </li>
+              <li>Copy the <strong>Client ID</strong> and paste it above</li>
+              <li>Set up the OAuth consent screen (can be in "Testing" mode for personal use)</li>
+            </ol>
+          </details>
+        </div>
+
         <div className="settings-section">
           <h3>Gemini API Key</h3>
           <p className="help-text" style={{ marginBottom: '12px' }}>
@@ -1949,8 +2366,8 @@ function SettingsModal({ geminiKey, onGeminiKeyChange, debugMode, onDebugModeCha
             </button>
           </div>
           
-          <div className="api-key-help">
-            <h4>How to get your Gemini API key:</h4>
+          <details className="api-key-help">
+            <summary style={{ cursor: 'pointer', fontWeight: '500' }}>How to get your Gemini API key</summary>
             <ol>
               <li>Go to <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">aistudio.google.com/apikey</a></li>
               <li>Sign in with your Google account</li>
@@ -1959,10 +2376,9 @@ function SettingsModal({ geminiKey, onGeminiKeyChange, debugMode, onDebugModeCha
               <li>Copy the key and paste it above</li>
             </ol>
             <p className="help-text" style={{ marginTop: '12px' }}>
-              The free tier includes 15 requests/minute. If you have Gemini Pro, you get higher limits.
-              Your key is stored only in your browser—it's never sent anywhere except directly to Google's API.
+              The free tier includes 15 requests/minute. Your key is stored only in your browser.
             </p>
-          </div>
+          </details>
         </div>
 
         <div className="settings-section">

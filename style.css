@@ -985,6 +985,106 @@ body {
   background: var(--green-pin);
 }
 
+/* Google Drive sync buttons */
+.btn-drive {
+  background: var(--cork-dark);
+}
+
+.btn-drive:hover {
+  background: #4285f4;
+  color: white;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--blue-pin);
+  text-decoration: underline;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+}
+
+/* Modal wide variant */
+.modal.modal-wide {
+  max-width: 600px;
+}
+
+/* Drive project list */
+.drive-project-list {
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--paper-shadow);
+  border-radius: 4px;
+}
+
+.drive-project-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--paper-shadow);
+}
+
+.drive-project-item:last-child {
+  border-bottom: none;
+}
+
+.drive-project-item:hover {
+  background: rgba(0,0,0,0.02);
+}
+
+.drive-project-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.drive-project-name {
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.drive-project-date {
+  font-size: 0.75rem;
+  color: var(--ink-light);
+}
+
+.btn-small {
+  padding: 4px 12px;
+  font-size: 0.8rem;
+}
+
+/* Collapsible help sections */
+details.api-key-help {
+  margin-top: 16px;
+}
+
+details.api-key-help summary {
+  color: var(--ink);
+  margin-bottom: 12px;
+}
+
+details.api-key-help[open] summary {
+  margin-bottom: 12px;
+}
+
+details.api-key-help ol {
+  margin-left: 20px;
+}
+
+details.api-key-help li {
+  margin-bottom: 8px;
+}
+
+details.api-key-help code {
+  background: rgba(0,0,0,0.05);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85em;
+}
+
 .entity-card.selected-for-merge {
   box-shadow: 0 0 0 3px var(--blue-pin), 6px 8px 20px rgba(0,0,0,0.3);
   z-index: 10;

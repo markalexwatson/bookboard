@@ -1,9 +1,10 @@
 # Bookboard
 
-A visual planning tool for novelists. Organise your characters, themes, locations, and scenes into folders on a digital corkboard. Extract structure from your manuscript with AI, drag cards around, export a "bible" document.
+A visual planning tool for novelists. Organise your characters, themes, locations, and scenes into folders on a digital corkboard. Extract structure from your manuscript with AI, drag cards around, sync across devices with Google Drive, export a "bible" document.
 
 ## Features
 
+- **Google Drive Sync**: Sync projects across devices. API keys stay local and are never uploaded.
 - **Folder-Based Organisation**: Cards are organised into folders by type (Characters, Scenes, Locations, Themes, Ideas). Click a folder to view and arrange its cards.
 - **Custom Folders**: Create your own folders (e.g., "Antagonists", "Act 1", "Red Herrings") to group cards across types.
 - **Novel & Collection Support**: Works with both novels (continuous story) and short story collections (independent stories).
@@ -17,13 +18,11 @@ A visual planning tool for novelists. Organise your characters, themes, location
   - Export your bible (characters, themes, custom folders, etc.)
   - Export JSON for backup/restore
 - **Auto-save**: Everything saves to your browser's localStorage automatically.
-- **No backend**: Pure client-side. Your data never leaves your browser (API calls go direct to Gemini).
+- **No backend**: Pure client-side. Your data stays on your device and your Google Drive.
 
-## Usage
+## Quick Start
 
-### Quick Start
-
-1. Open `index.html` in your browser (or visit the GitHub Pages URL)
+1. Open `index.html` in your browser (or serve locally with `python -m http.server 8000`)
 2. Click **Import** and drop in a Markdown file (your manuscript) or a JSON file (a previous export)
 3. Click **Extract** to use Gemini AI to identify characters, themes, locations, and scenes (requires API key)
 4. Click folders to view cards of each type; drag cards to arrange them
@@ -31,16 +30,64 @@ A visual planning tool for novelists. Organise your characters, themes, location
 6. Press **ESC** to return from a folder to the top-level view
 7. Click **Export** to save your manuscript, bible, or project backup
 
-### Navigation
+## Google Drive Sync
+
+Sync your projects across multiple devices using Google Drive. Your manuscripts are stored in a "Bookboard" folder on your Drive.
+
+**Security model:**
+- Project data syncs to Google Drive
+- API keys (Gemini, Google Client ID) stay in local browser storage only — never uploaded
+- The app can only access files it creates (uses `drive.file` scope)
+- Even if someone accesses your Drive, they can't use your API keys
+
+### Setup
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Select your project (or create one)
+3. Enable the **Google Drive API**:
+   - Go to APIs & Services → Library
+   - Search for "Google Drive API"
+   - Click Enable
+4. Create OAuth credentials:
+   - Go to APIs & Services → Credentials
+   - Click **Create Credentials** → **OAuth client ID**
+   - Choose **Web application**
+   - Add to **Authorized JavaScript origins**:
+     - `http://localhost:8000` (for local development)
+     - Your GitHub Pages URL (if hosted there)
+   - Click Create and copy the **Client ID**
+5. Set up OAuth consent screen:
+   - Go to APIs & Services → OAuth consent screen
+   - Choose External (or Internal if using Google Workspace)
+   - Fill in required fields
+   - For personal use, you can leave it in "Testing" mode and add your email as a test user
+6. In Bookboard, go to **Settings** and paste your Client ID
+7. Click **Sign in to Google**
+
+### Usage
+
+Once signed in:
+
+- **Library view**:
+  - **☁️ Drive** — View and load projects from Google Drive
+  - **⬆️ Sync All** — Upload all local projects to Drive
+  
+- **Editor view**:
+  - **☁️** button — Save current project to Drive
+
+When loading a project that exists both locally and on Drive, you'll be asked which version to keep.
+
+## Navigation
 
 - **Top-level view**: Shows all folders (5 built-in types + any custom folders you've created)
 - **Inside a folder**: Shows all cards of that type, freely draggable
 - **+ button**: At top level, creates a custom folder. Inside a folder, adds a card of that type.
+- **⊞ button**: Rearrange cards in current folder to a tidy grid
 - **ESC key**: Returns to top-level folder view (or clears merge selection)
 - **Double-click a card**: Edit its details
 - **Shift+click cards**: Select cards for merging (same type only)
 
-### Novel vs Short Story Collection
+## Novel vs Short Story Collection
 
 When extracting entities, you'll be asked whether your manuscript is:
 
@@ -48,7 +95,7 @@ When extracting entities, you'll be asked whether your manuscript is:
 
 - **Short Story Collection**: Independent stories. Characters with the same name in different stories remain separate (no deduplication). Cards show story titles instead of chapter numbers.
 
-### Merging Cards
+## Merging Cards
 
 If you have duplicate cards or want to combine related entries:
 
@@ -58,9 +105,7 @@ If you have duplicate cards or want to combine related entries:
 4. The merged card combines descriptions and chapter/story references
 5. Press **ESC** to cancel and clear selection
 
-This is particularly useful for short story collections where the same character name might appear in multiple stories but you later realise they should be combined.
-
-### Custom Folders
+## Custom Folders
 
 Custom folders let you group cards across types. For example:
 
@@ -73,13 +118,7 @@ Cards can belong to both their type folder (e.g., Characters) AND a custom folde
 
 To assign a card to a custom folder, edit the card and select from the "Custom Folder" dropdown (directly below the Type selector).
 
-### Hosting on GitHub Pages
-
-1. Fork or clone this repository
-2. Enable GitHub Pages in your repo settings (Settings → Pages → Source: main branch)
-3. Access at `https://yourusername.github.io/bookboard/`
-
-### Markdown Import Format
+## Markdown Import Format
 
 The importer treats `#` as the book title and `##` as chapter headers. Everything between chapter headers becomes chapter content.
 
@@ -104,7 +143,7 @@ The body was found at dawn...
 
 If your document only uses `#` headers (no `##`), they'll be treated as chapters instead.
 
-### JSON Format
+## JSON Format
 
 For full round-trip fidelity, use JSON. This preserves card positions, custom folders, book type, and all metadata.
 
@@ -137,21 +176,12 @@ For full round-trip fidelity, use JSON. This preserves card positions, custom fo
       "chapterRefs": ["ch-1", "ch-2"],
       "folder": "Antagonists",
       "position": { "x": 40, "y": 40 }
-    },
-    {
-      "id": "ent-2",
-      "type": "character",
-      "name": "Sarah",
-      "description": "Lighthouse keeper's daughter in 'The Light'",
-      "storyRefs": ["The Light at Midnight"],
-      "folder": null,
-      "position": { "x": 280, "y": 40 }
     }
   ]
 }
 ```
 
-#### Entity Types
+### Entity Types
 
 - `character` — People in your story
 - `theme` — Recurring ideas or motifs
@@ -159,7 +189,7 @@ For full round-trip fidelity, use JSON. This preserves card positions, custom fo
 - `scene` — Key dramatic moments
 - `idea` — Freeform notes
 
-#### Entity Fields
+### Entity Fields
 
 - `type` — One of the five types above (required)
 - `name` — Display name (required)
@@ -169,7 +199,7 @@ For full round-trip fidelity, use JSON. This preserves card positions, custom fo
 - `folder` — Name of a custom folder, or null (optional)
 - `position` — `{x, y}` coordinates on the corkboard (optional, auto-assigned if missing)
 
-### Using AI Extraction
+## AI Extraction
 
 Click the **Extract** button in the toolbar to use Gemini AI to automatically identify:
 - Characters (people mentioned by name)
@@ -177,25 +207,25 @@ Click the **Extract** button in the toolbar to use Gemini AI to automatically id
 - Locations (places and settings)
 - Key scenes (important dramatic moments)
 
-You'll need a Gemini API key, which you can get free at [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Your key is stored only in your browser's localStorage and is sent directly to Google's API—it never touches any other server.
+You'll need a Gemini API key, which you can get free at [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Your key is stored only in your browser's localStorage — it's never synced to Google Drive or sent anywhere except directly to Google's Gemini API.
 
-#### Extraction Options
+### Extraction Options
 
 When you have existing cards, clicking Extract gives you two options:
 - **Clear All & Re-extract**: Removes existing cards and starts fresh
 - **Add to Existing**: Keeps your cards and adds newly extracted ones
 
-### Exports
+## Exports
 
 - **Project (JSON)**: Complete backup including positions, custom folders, book type, everything. Use for backup/restore.
 - **Manuscript (Markdown)**: Just the chapter text in order. Use for editing in other tools.
 - **Bible (Markdown)**: Structured document with chapter outline, all entities by type, and custom folder contents. Use as a reference while writing.
 
-## Local Development
+## Hosting
 
-No build step required. Just open `index.html` in a browser.
+### Local Development
 
-If you want live reload during development:
+No build step required. Just serve the directory:
 
 ```bash
 # Using Python
@@ -205,28 +235,46 @@ python -m http.server 8000
 npx serve .
 ```
 
+Then open `http://localhost:8000` in your browser.
+
+### GitHub Pages
+
+1. Fork or clone this repository
+2. Enable GitHub Pages in your repo settings (Settings → Pages → Source: main branch)
+3. Add your GitHub Pages URL to your Google OAuth credentials (Authorized JavaScript origins)
+4. Access at `https://yourusername.github.io/bookboard/`
+
 ## Browser Support
 
 Modern browsers only (Chrome, Firefox, Safari, Edge). Uses ES6+ features and CSS Grid.
 
 ## Data Privacy
 
-All data is stored in your browser's localStorage. Nothing is sent to any server except:
-- Gemini API calls (your manuscript text is sent to Google for extraction, if you use that feature)
+- **Local storage**: Working copies of projects, API keys, settings
+- **Google Drive** (if enabled): Project data only (no API keys)
+- **Gemini API** (if used): Your manuscript text is sent to Google for entity extraction
 
-If you clear your browser data, your projects will be lost—export regularly!
+If you clear your browser data, your local projects and settings will be lost. Use Google Drive sync or manual JSON export for backup.
 
 ## Version
 
-Current version: 2.1
+Current version: 2.2
 
 ## Changelog
+
+### 2.2
+- Google Drive sync (projects sync across devices, API keys stay local)
+- Save to Drive button in editor toolbar
+- Load from Drive modal in library
+- Sync All button to upload all local projects
+- Collapsible help sections in Settings
 
 ### 2.1
 - Novel vs Collection mode for extraction (collections skip deduplication, show story titles)
 - Front matter preservation (epigraphs, dedications before first chapter)
 - Merge cards feature (shift+click to select, combine duplicates)
 - Grid-based card positioning (no more off-screen scatter)
+- Rearrange button to reset card layout
 - Custom folder dropdown moved under Type for clarity
 
 ### 2.0
