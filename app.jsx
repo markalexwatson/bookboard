@@ -4,7 +4,7 @@ const { useState, useEffect, useRef, useCallback } = React;
 const generateId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
 // App version
-const APP_VERSION = '2.3';
+const APP_VERSION = '2.4';
 
 // Storage keys (all local-only, not synced to Drive)
 const STORAGE_KEYS = {
@@ -13,7 +13,8 @@ const STORAGE_KEYS = {
   geminiKey: 'bookboard-gemini-key',
   googleClientId: 'bookboard-google-client-id',
   lastOpenedProject: 'bookboard-last-opened',
-  debugMode: 'bookboard-debug-mode'
+  debugMode: 'bookboard-debug-mode',
+  autoRearrange: 'bookboard-auto-rearrange'
 };
 
 // Google Drive API configuration
@@ -285,11 +286,17 @@ function App() {
   const [googleAuthStatus, setGoogleAuthStatus] = useState('not_configured'); // 'not_configured', 'signed_out', 'signed_in'
   const [driveProjects, setDriveProjects] = useState([]);
   const [debugMode, setDebugMode] = useState(() => localStorage.getItem(STORAGE_KEYS.debugMode) === 'true');
+  const [autoRearrange, setAutoRearrange] = useState(() => localStorage.getItem(STORAGE_KEYS.autoRearrange) !== 'false'); // Default true
 
   // Save debug mode when it changes
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.debugMode, debugMode.toString());
   }, [debugMode]);
+
+  // Save autoRearrange when it changes
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.autoRearrange, autoRearrange.toString());
+  }, [autoRearrange]);
 
   // Save Gemini key when it changes
   useEffect(() => {
@@ -1239,7 +1246,9 @@ Extract (in this order - SCENES FIRST as they are most important):
 
 3. LOCATIONS: Named places or settings.
 
-4. THEMES: Major themes or motifs (typically 2-4 for this excerpt).
+4. OBJECTS: Significant objects only - McGuffins, artefacts, weapons, heirlooms, or items central to the plot. Do NOT include mundane items. May be zero if no significant objects appear.
+
+5. THEMES: Major themes or motifs (typically 2-4 for this excerpt).
 
 Use ${unitName} numbers ${startNum}-${endNum} for the chapterNums field.
 
@@ -1249,6 +1258,7 @@ Respond ONLY with valid JSON (no markdown fences, no explanation):
     {"type": "scene", "name": "Scene Title", "description": "What happens", "chapterNums": [${startNum}]},
     {"type": "character", "name": "Name", "description": "Brief description", "chapterNums": [${startNum}]},
     {"type": "location", "name": "Place", "description": "Description", "chapterNums": [${startNum}]},
+    {"type": "object", "name": "Object Name", "description": "Significance", "chapterNums": [${startNum}]},
     {"type": "theme", "name": "Theme Name", "description": "How it manifests", "chapterNums": [${startNum}]}
   ]
 }`;
@@ -1424,6 +1434,8 @@ Respond ONLY with valid JSON (no markdown fences, no explanation):
             onGoogleClientIdChange={setGoogleClientId}
             googleAuthStatus={googleAuthStatus}
             onGoogleSignIn={handleGoogleSignIn}
+            autoRearrange={autoRearrange}
+            onAutoRearrangeChange={setAutoRearrange}
             debugMode={debugMode}
             onDebugModeChange={setDebugMode}
             onClose={() => setShowSettingsModal(false)}
@@ -1484,6 +1496,7 @@ Respond ONLY with valid JSON (no markdown fences, no explanation):
             onDeleteCustomFolder={deleteCustomFolder}
             onMergeEntities={(selected) => mergeEntities(selected[0], selected[1])}
             onRearrangeEntities={rearrangeEntities}
+            autoRearrange={autoRearrange}
           />
         )}
       </div>
@@ -1663,7 +1676,8 @@ function Corkboard({
   onAddFolder,
   onDeleteCustomFolder,
   onMergeEntities,
-  onRearrangeEntities
+  onRearrangeEntities,
+  autoRearrange = true
 }) {
   const [activeFolder, setActiveFolder] = useState(null);
   const [isCustomFolder, setIsCustomFolder] = useState(false);
@@ -1693,6 +1707,24 @@ function Corkboard({
     setSelectedForMerge([]);
   }, [activeFolder]);
   
+  // Auto-rearrange cards when opening a folder
+  useEffect(() => {
+    if (activeFolder && autoRearrange) {
+      // Get current folder entities
+      let folderEnts;
+      if (isKeyFolder) {
+        folderEnts = entities.filter(e => e.type === activeFolder && e.starred);
+      } else if (isCustomFolder) {
+        folderEnts = entities.filter(e => e.folder === activeFolder);
+      } else {
+        folderEnts = entities.filter(e => e.type === activeFolder);
+      }
+      if (folderEnts.length > 0) {
+        onRearrangeEntities(folderEnts.map(e => e.id));
+      }
+    }
+  }, [activeFolder, isCustomFolder, isKeyFolder]); // Only on folder change, not on entity changes
+  
   // Toggle entity selection for merge
   const toggleMergeSelection = (entity) => {
     setSelectedForMerge(prev => {
@@ -1715,6 +1747,7 @@ function Corkboard({
     { type: 'scene', label: 'Scenes', keyLabel: 'Key Scenes', icon: '🎬' },
     { type: 'character', label: 'Characters', keyLabel: 'Key Characters', icon: '👤' },
     { type: 'location', label: 'Locations', keyLabel: 'Key Locations', icon: '📍' },
+    { type: 'object', label: 'Objects', keyLabel: 'Key Objects', icon: '🔮' },
     { type: 'theme', label: 'Themes', keyLabel: 'Key Themes', icon: '💡' },
     { type: 'idea', label: 'Ideas', keyLabel: 'Key Ideas', icon: '📝' }
   ];
@@ -1801,10 +1834,12 @@ function Corkboard({
   
   // Folder view - showing cards of one type or custom folder
   if (activeFolder) {
+    const folderTitle = isKeyFolder ? activeFolderInfo?.keyLabel : activeFolderInfo?.label;
+    
     return (
       <div className="corkboard">
         <div className="folder-view-header">
-          <button className="btn" onClick={() => { setActiveFolder(null); setIsCustomFolder(false); }}>← Back</button>
+          <button className="btn" onClick={() => { setActiveFolder(null); setIsCustomFolder(false); setIsKeyFolder(false); }}>← Back</button>
           {isCustomFolder ? (
             <>
               <span className="folder-icon custom">📁</span>
@@ -1820,8 +1855,8 @@ function Corkboard({
             </>
           ) : (
             <>
-              <span className={`folder-icon ${activeFolder}`}>{activeFolderInfo?.icon}</span>
-              <h3>{activeFolderInfo?.label}</h3>
+              <span className={`folder-icon ${activeFolder}`}>{isKeyFolder ? '⭐' : activeFolderInfo?.icon}</span>
+              <h3>{folderTitle}</h3>
               <span className="folder-count">{folderEntities.length} cards</span>
             </>
           )}
@@ -2319,7 +2354,7 @@ function DriveModal({ projects, onLoad, onRefresh, onClose }) {
 }
 
 // Settings Modal Component
-function SettingsModal({ geminiKey, onGeminiKeyChange, googleClientId, onGoogleClientIdChange, googleAuthStatus, onGoogleSignIn, debugMode, onDebugModeChange, onClose }) {
+function SettingsModal({ geminiKey, onGeminiKeyChange, googleClientId, onGoogleClientIdChange, googleAuthStatus, onGoogleSignIn, autoRearrange, onAutoRearrangeChange, debugMode, onDebugModeChange, onClose }) {
   const [showKey, setShowKey] = useState(false);
   const [showClientId, setShowClientId] = useState(false);
   
@@ -2403,7 +2438,7 @@ function SettingsModal({ geminiKey, onGeminiKeyChange, googleClientId, onGoogleC
         <div className="settings-section">
           <h3>Gemini API Key</h3>
           <p className="help-text" style={{ marginBottom: '12px' }}>
-            Used for automatic entity extraction (characters, themes, locations, scenes).
+            Used for automatic entity extraction (characters, themes, locations, objects, scenes).
           </p>
           
           <div style={{ position: 'relative' }}>
@@ -2436,6 +2471,21 @@ function SettingsModal({ geminiKey, onGeminiKeyChange, googleClientId, onGoogleC
               The free tier includes 15 requests/minute. Your key is stored only in your browser.
             </p>
           </details>
+        </div>
+
+        <div className="settings-section">
+          <h3>Corkboard</h3>
+          <label className="toggle-label">
+            <input
+              type="checkbox"
+              checked={autoRearrange}
+              onChange={(e) => onAutoRearrangeChange(e.target.checked)}
+            />
+            <span>Auto-arrange cards when opening folders</span>
+          </label>
+          <p className="help-text" style={{ marginTop: '8px' }}>
+            Automatically arrange cards in a grid when you open a folder. Turn off to preserve manual positioning.
+          </p>
         </div>
 
         <div className="settings-section">
@@ -2578,9 +2628,10 @@ function EntityModal({ entity, chapters, customFolders = [], defaultType, onSave
             onChange={(e) => setForm({ ...form, type: e.target.value })}
           >
             <option value="character">Character</option>
-            <option value="theme">Theme</option>
             <option value="location">Location</option>
+            <option value="object">Object</option>
             <option value="scene">Scene</option>
+            <option value="theme">Theme</option>
             <option value="idea">Idea / Note</option>
           </select>
 
@@ -2707,7 +2758,7 @@ function AddFolderModal({ existingFolders = [], onAdd, onClose }) {
   
   // Reserved folder names (Key folders)
   const reservedNames = [
-    'key scenes', 'key characters', 'key locations', 'key themes', 'key ideas'
+    'key scenes', 'key characters', 'key locations', 'key objects', 'key themes', 'key ideas'
   ];
 
   const handleSubmit = (e) => {

@@ -445,6 +445,9 @@ body {
 .entity-card.location { background: var(--location); }
 .entity-card.location::before { background: radial-gradient(circle at 30% 30%, var(--purple-pin), #5a3a50); }
 
+.entity-card.object { background: #f5e6d3; }
+.entity-card.object::before { background: radial-gradient(circle at 30% 30%, #9b59b6, #6a3d7a); }
+
 .entity-card.scene { background: var(--scene); }
 .entity-card.scene::before { background: radial-gradient(circle at 30% 30%, var(--yellow-pin), #a68012); }
 
