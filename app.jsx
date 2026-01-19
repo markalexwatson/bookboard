@@ -4,7 +4,7 @@ const { useState, useEffect, useRef, useCallback } = React;
 const generateId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
 // App version
-const APP_VERSION = '2.2';
+const APP_VERSION = '2.3';
 
 // Storage keys (all local-only, not synced to Drive)
 const STORAGE_KEYS = {
@@ -500,6 +500,16 @@ function App() {
     setCurrentProject(prev => ({
       ...prev,
       entities: prev.entities.filter(e => e.id !== id)
+    }));
+  };
+
+  // Toggle star on entity
+  const toggleStar = (id) => {
+    setCurrentProject(prev => ({
+      ...prev,
+      entities: prev.entities.map(e => 
+        e.id === id ? { ...e, starred: !e.starred } : e
+      )
     }));
   };
 
@@ -1455,12 +1465,14 @@ Respond ONLY with valid JSON (no markdown fences, no explanation):
           />
         ) : (
           <Corkboard 
+            key={currentProject.id}
             entities={currentProject.entities}
             chapters={currentProject.chapters}
             customFolders={currentProject.customFolders || []}
             onUpdatePosition={updateEntityPosition}
             onEditEntity={(entity) => { setEditingEntity(entity); setShowEntityModal(true); }}
             onDeleteEntity={deleteEntity}
+            onToggleStar={toggleStar}
             isEmpty={currentProject.chapters.length === 0 && currentProject.entities.length === 0}
             onImport={() => setShowImportModal(true)}
             onAddEntity={(type, folder) => { 
@@ -1643,7 +1655,8 @@ function Corkboard({
   customFolders = [],
   onUpdatePosition, 
   onEditEntity, 
-  onDeleteEntity, 
+  onDeleteEntity,
+  onToggleStar,
   isEmpty, 
   onImport,
   onAddEntity,
@@ -1654,6 +1667,7 @@ function Corkboard({
 }) {
   const [activeFolder, setActiveFolder] = useState(null);
   const [isCustomFolder, setIsCustomFolder] = useState(false);
+  const [isKeyFolder, setIsKeyFolder] = useState(false);
   const [selectedForMerge, setSelectedForMerge] = useState([]);
   const [showMergeModal, setShowMergeModal] = useState(false);
   
@@ -1666,6 +1680,7 @@ function Corkboard({
         } else if (activeFolder) {
           setActiveFolder(null);
           setIsCustomFolder(false);
+          setIsKeyFolder(false);
         }
       }
     };
@@ -1697,18 +1712,30 @@ function Corkboard({
   
   // Entity types for folders
   const entityTypes = [
-    { type: 'scene', label: 'Scenes', icon: '🎬' },
-    { type: 'character', label: 'Characters', icon: '👤' },
-    { type: 'location', label: 'Locations', icon: '📍' },
-    { type: 'theme', label: 'Themes', icon: '💡' },
-    { type: 'idea', label: 'Ideas', icon: '📝' }
+    { type: 'scene', label: 'Scenes', keyLabel: 'Key Scenes', icon: '🎬' },
+    { type: 'character', label: 'Characters', keyLabel: 'Key Characters', icon: '👤' },
+    { type: 'location', label: 'Locations', keyLabel: 'Key Locations', icon: '📍' },
+    { type: 'theme', label: 'Themes', keyLabel: 'Key Themes', icon: '💡' },
+    { type: 'idea', label: 'Ideas', keyLabel: 'Key Ideas', icon: '📝' }
   ];
+  
+  // Reserved folder names (can't create custom folders with these names)
+  const reservedFolderNames = entityTypes.map(et => et.keyLabel.toLowerCase());
   
   // Count entities per type
   const getCounts = () => {
     const counts = {};
     entityTypes.forEach(et => {
       counts[et.type] = entities.filter(e => e.type === et.type).length;
+    });
+    return counts;
+  };
+  
+  // Count starred entities per type
+  const getStarredCounts = () => {
+    const counts = {};
+    entityTypes.forEach(et => {
+      counts[et.type] = entities.filter(e => e.type === et.type && e.starred).length;
     });
     return counts;
   };
@@ -1723,11 +1750,16 @@ function Corkboard({
   };
   
   const counts = getCounts();
+  const starredCounts = getStarredCounts();
   const customCounts = getCustomFolderCounts();
   
   // Get entities for current view
   const getFolderEntities = () => {
     if (!activeFolder) return [];
+    if (isKeyFolder) {
+      // Key folder: starred entities of that type
+      return entities.filter(e => e.type === activeFolder && e.starred);
+    }
     if (isCustomFolder) {
       return entities.filter(e => e.folder === activeFolder);
     }
@@ -1829,13 +1861,16 @@ function Corkboard({
                 onUpdatePosition={onUpdatePosition}
                 onEdit={() => onEditEntity(entity)}
                 onDelete={() => onDeleteEntity(entity.id)}
+                onToggleStar={!isCustomFolder ? () => onToggleStar(entity.id) : null}
                 isSelected={selectedForMerge.some(e => e.id === entity.id)}
                 onShiftClick={() => toggleMergeSelection(entity)}
               />
             ))}
           </div>
         </div>
-        <button className="add-entity-btn" onClick={handleAddClick} title="Add card">+</button>
+        {!isKeyFolder && (
+          <button className="add-entity-btn" onClick={handleAddClick} title="Add card">+</button>
+        )}
       </div>
     );
   }
@@ -1849,7 +1884,7 @@ function Corkboard({
           <div 
             key={et.type}
             className={`entity-folder ${et.type}`}
-            onClick={() => { setActiveFolder(et.type); setIsCustomFolder(false); }}
+            onClick={() => { setActiveFolder(et.type); setIsCustomFolder(false); setIsKeyFolder(false); }}
             style={{ opacity: counts[et.type] === 0 ? 0.5 : 1 }}
           >
             <div className="folder-icon">{et.icon}</div>
@@ -1858,12 +1893,25 @@ function Corkboard({
           </div>
         ))}
         
+        {/* Key folders (only shown if starred entities exist) */}
+        {entityTypes.filter(et => starredCounts[et.type] > 0).map(et => (
+          <div 
+            key={`key-${et.type}`}
+            className={`entity-folder key-folder ${et.type}`}
+            onClick={() => { setActiveFolder(et.type); setIsCustomFolder(false); setIsKeyFolder(true); }}
+          >
+            <div className="folder-icon">⭐</div>
+            <div className="folder-label">{et.keyLabel}</div>
+            <div className="folder-count">{starredCounts[et.type]} cards</div>
+          </div>
+        ))}
+        
         {/* Custom folders */}
         {(customFolders || []).map(folder => (
           <div 
             key={folder}
             className="entity-folder custom"
-            onClick={() => { setActiveFolder(folder); setIsCustomFolder(true); }}
+            onClick={() => { setActiveFolder(folder); setIsCustomFolder(true); setIsKeyFolder(false); }}
             style={{ opacity: customCounts[folder] === 0 ? 0.5 : 1 }}
           >
             <div className="folder-icon">📁</div>
@@ -1937,13 +1985,13 @@ function ChapterEditor({ chapter, chapterIndex, onUpdateContent, onUpdateTitle, 
 }
 
 // Entity Card Component (Draggable)
-function EntityCard({ entity, chapters, onUpdatePosition, onEdit, onDelete, isSelected, onShiftClick }) {
+function EntityCard({ entity, chapters, onUpdatePosition, onEdit, onDelete, onToggleStar, isSelected, onShiftClick }) {
   const cardRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
 
   const handleMouseDown = (e) => {
-    if (e.target.classList.contains('entity-delete')) return;
+    if (e.target.classList.contains('entity-delete') || e.target.classList.contains('entity-star')) return;
     
     // Shift+click for merge selection
     if (e.shiftKey && onShiftClick) {
@@ -2014,6 +2062,15 @@ function EntityCard({ entity, chapters, onUpdatePosition, onEdit, onDelete, isSe
       onDoubleClick={onEdit}
     >
       <button className="entity-delete" onClick={onDelete} title="Delete card">×</button>
+      {onToggleStar && (
+        <button 
+          className={`entity-star ${entity.starred ? 'starred' : ''}`} 
+          onClick={(e) => { e.stopPropagation(); onToggleStar(); }}
+          title={entity.starred ? "Unstar" : "Star as key"}
+        >
+          {entity.starred ? '★' : '☆'}
+        </button>
+      )}
       {isSelected && <div className="merge-indicator">🔗</div>}
       <div className="entity-type">{entity.type}</div>
       <div className="entity-name">{entity.name}</div>
@@ -2647,6 +2704,11 @@ function MergeModal({ entities, onMerge, onClose }) {
 function AddFolderModal({ existingFolders = [], onAdd, onClose }) {
   const [name, setName] = useState('');
   const [error, setError] = useState('');
+  
+  // Reserved folder names (Key folders)
+  const reservedNames = [
+    'key scenes', 'key characters', 'key locations', 'key themes', 'key ideas'
+  ];
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -2655,8 +2717,12 @@ function AddFolderModal({ existingFolders = [], onAdd, onClose }) {
       setError('Please enter a folder name');
       return;
     }
-    if (existingFolders.includes(trimmed)) {
+    if (existingFolders.map(f => f.toLowerCase()).includes(trimmed.toLowerCase())) {
       setError('A folder with this name already exists');
+      return;
+    }
+    if (reservedNames.includes(trimmed.toLowerCase())) {
+      setError('This name is reserved for Key folders');
       return;
     }
     onAdd(trimmed);

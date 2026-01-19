@@ -1090,6 +1090,43 @@ details.api-key-help code {
   z-index: 10;
 }
 
+/* Star button on cards */
+.entity-star {
+  position: absolute;
+  top: 8px;
+  right: 32px;
+  background: none;
+  border: none;
+  font-size: 1.1rem;
+  cursor: pointer;
+  opacity: 0.4;
+  transition: opacity 0.15s, transform 0.15s;
+  padding: 0;
+  line-height: 1;
+  color: #888;
+}
+
+.entity-star:hover {
+  opacity: 1;
+  transform: scale(1.2);
+}
+
+.entity-star.starred {
+  opacity: 1;
+  color: #f4c542;
+  text-shadow: 0 0 4px rgba(244, 197, 66, 0.5);
+}
+
+/* Key folders */
+.entity-folder.key-folder {
+  background: linear-gradient(135deg, #fff9e6 0%, #fff3cc 100%);
+  border: 2px solid #f4c542;
+}
+
+.entity-folder.key-folder .folder-icon {
+  color: #f4c542;
+}
+
 .merge-indicator {
   position: absolute;
   top: -8px;
